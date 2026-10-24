@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use std::io::{Read, Write};
 use std::{env, thread};
 
+const KEATS_SCRIPT: &str = include_str!("../keats/keats.py");
 const GMAIL_PROMPT: &str = include_str!("../prompts/gmail.md");
 const GMAIL_SCHEMA: &str = r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["thread_id","company","kind","title","status"],"properties":{"thread_id":{"type":"string"},"company":{"type":"string"},"kind":{"enum":["OA","assessment","interview"]},"title":{"type":"string"},"deadline":{"type":["string","null"]},"url":{"type":["string","null"]},"status":{"enum":["pending","done","rejected"]}}}}}}"#;
 const COURSEWORK_PROMPT: &str = include_str!("../prompts/coursework.md");
@@ -97,6 +98,10 @@ fn last_line(bytes: &[u8]) -> String {
 }
 
 fn keats_job() -> Result<(), String> {
+    // keats.py puts its output next to itself, so run it from the data dir.
+    if fs::read_to_string(keats_script()).ok().as_deref() != Some(KEATS_SCRIPT) {
+        fs::write(keats_script(), KEATS_SCRIPT).map_err(|e| format!("keats.py: {e}"))?;
+    }
     let out = Command::new("python3")
         .arg(keats_script())
         .stdin(Stdio::null())

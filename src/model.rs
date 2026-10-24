@@ -22,7 +22,7 @@ pub fn data_dir() -> PathBuf {
 }
 
 pub fn keats_script() -> PathBuf {
-    home().join("keats/keats.py")
+    data_dir().join("keats.py")
 }
 
 pub fn keats_token() -> PathBuf {
@@ -30,11 +30,11 @@ pub fn keats_token() -> PathBuf {
 }
 
 pub fn keats_items() -> PathBuf {
-    home().join("keats/out/items.json")
+    data_dir().join("out/items.json")
 }
 
 pub fn keats_assessments() -> PathBuf {
-    home().join("keats/out/assessments.json")
+    data_dir().join("out/assessments.json")
 }
 
 pub fn coursework_file() -> PathBuf {
