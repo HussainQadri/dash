@@ -252,6 +252,9 @@ pub struct Status {
 pub struct State {
     #[serde(default)]
     pub done: BTreeSet<String>,
+    /// Every item key dash has shown, so new ones can be lit up.
+    #[serde(default)]
+    pub seen: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -260,6 +263,8 @@ pub struct Data {
     pub forum_note: Option<String>,
     /// Per module: (threads, unanswered), before trimming to FORUM_PER_MODULE.
     pub forum_counts: HashMap<String, (usize, usize)>,
+    /// Every loaded item, including ones trimmed or too old to show.
+    pub keys: BTreeSet<String>,
     pub status: Status,
 }
 
@@ -276,7 +281,9 @@ impl Data {
             .chain(gmail.iter().filter(|g| g.status == "pending").map(GmailItem::to_item));
 
         let mut sections: [Vec<Item>; 3] = Default::default();
+        let mut keys = BTreeSet::new();
         for item in items.filter(|i| !done.contains(&i.key())) {
+            keys.insert(item.key());
             let idx = match item.section.as_str() {
                 "due" if item.due.is_none_or(|d| d >= now - 86400) => 0,
                 "news" if item.when.unwrap_or(0) >= now - RECENT_DAYS * 86400 => 1,
@@ -311,6 +318,7 @@ impl Data {
             sections,
             forum_note: keats.forum_note,
             forum_counts,
+            keys,
             status: read_json(&status_file()),
         }
     }

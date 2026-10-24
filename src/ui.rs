@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::fx::{self, lerp, wave};
 use crate::model::{Item, SourceStatus, days_from_today, local, now};
 use crate::theme::*;
 use ratatui::Frame;
@@ -59,15 +60,41 @@ fn countdown(i: &Item) -> Span<'static> {
     let Some(due) = i.due else { return Span::styled("    — ", FAINT) };
     let d = due - now();
     let text = format!(" {:>4} ", if d < 0 { format!("-{}", span_text(d)) } else { span_text(d) });
+    if d < 0 && i.pending && let Some(g) = glitch(&i.id) {
+        return Span::styled(g.apply(&text), Style::new().fg(g.color).bold());
+    }
     let style = match d {
         _ if !i.pending => Style::new().fg(DIM),
         d if d < 0 => Style::new().fg(RED).bold(),
-        d if d <= 86400 => Style::new().fg(BG).bg(RED).bold(),
+        d if d <= 86400 => Style::new().fg(BG).bg(lerp(RED, Color::Rgb(0x9e, 0x3f, 0x3f), wave(1800))).bold(),
         d if d <= 3 * 86400 => Style::new().fg(RED).bold(),
         d if d <= 7 * 86400 => Style::new().fg(YELLOW).bold(),
         _ => Style::new().fg(DIM),
     };
     Span::styled(text, style)
+}
+
+struct Glitch {
+    frame: usize,
+    color: ratatui::style::Color,
+}
+
+impl Glitch {
+    fn apply(&self, text: &str) -> String {
+        const NOISE: [char; 6] = ['▚', '▞', '░', '▒', '¦', '╳'];
+        text.chars()
+            .enumerate()
+            .map(|(n, c)| if c != ' ' && (n + self.frame).is_multiple_of(3) { NOISE[(n + self.frame) % NOISE.len()] } else { c })
+            .collect()
+    }
+}
+
+/// Overdue badges glitch for ~150ms every couple of seconds, staggered per item.
+fn glitch(id: &str) -> Option<Glitch> {
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as usize;
+    let offset = id.bytes().map(usize::from).sum::<usize>() * 37;
+    let phase = (ms + offset) % 2600;
+    (phase < 150).then(|| Glitch { frame: ms / 40, color: if (ms / 50).is_multiple_of(2) { PINK } else { RED } })
 }
 
 fn urgency(due: i64) -> ratatui::style::Color {
@@ -115,7 +142,7 @@ fn panel<'a>(ic: &'a str, name: &'a str, count: usize, focused: bool, warn: Opti
     }
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(if focused { DIM } else { FAINT })
+        .border_style(if focused { lerp(DIM, TEAL, 0.55 * wave(4200)) } else { FAINT })
         .title(Line::from(title))
         .padding(Padding::horizontal(1));
     if count > 0 {
@@ -175,18 +202,39 @@ fn source<'a>(name: &'a str, s: &'a SourceStatus, app: &App) -> Vec<Span<'a>> {
         _ => e.to_string(),
     };
     let (dot, color, text) = match s.state.as_str() {
-        _ if running => (SPINNER[app.tick % SPINNER.len()], YELLOW, "syncing".to_string()),
+        _ if running => (SPINNER[app.tick() % SPINNER.len()], YELLOW, "syncing".to_string()),
         "running" => ("●", RED, "interrupted".into()),
         "error" => ("●", RED, err(&s.error)),
         "ok" => ("●", GREEN, ago(s.at)),
         _ => ("●", FAINT, "never synced".into()),
     };
     let ic = if name == "gmail" { icon::GMAIL } else { icon::KEATS };
-    vec![
-        Span::styled(format!("{dot} "), color),
-        Span::styled(format!("{ic} {name} "), DIM),
-        Span::styled(text, if s.state == "error" { RED } else { FAINT }),
-    ]
+    let mut spans = vec![Span::styled(format!("{dot} "), color), Span::styled(format!("{ic} {name} "), DIM)];
+    if running {
+        spans.extend(shimmer(&text));
+    } else {
+        spans.push(Span::styled(text, if s.state == "error" { RED } else { FAINT }));
+    }
+    spans
+}
+
+/// A highlight that runs across `text` and loops.
+fn shimmer(text: &str) -> Vec<Span<'static>> {
+    let n = text.chars().count() as f32;
+    let head = wave(1400) * (n + 6.0) - 3.0;
+    text.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            let t = 1.0 - ((i as f32 - head).abs() / 3.0).min(1.0);
+            Span::styled(c.to_string(), lerp(DIM, YELLOW, t))
+        })
+        .collect()
+}
+
+/// Where row `row` of a list landed on screen, given the list's scroll offset.
+fn row_rect(inner: Rect, row: usize, offset: usize) -> Option<Rect> {
+    let y = row.checked_sub(offset)?;
+    (y < inner.height as usize).then(|| Rect { y: inner.y + y as u16, height: 1, ..inner })
 }
 
 fn footer(f: &mut Frame, area: Rect) {
@@ -270,15 +318,24 @@ fn due_panel(f: &mut Frame, app: &mut App, area: Rect, compact: bool) {
             Span::styled(fit(&i.title, title_w), text),
             Span::styled(format!(" {date:>10}"), DIM),
         ]))
-        .style(row_style(sel == Some(n), focused)));
+        .style(row_style(app, i, sel == Some(n), focused)));
     }
     app.views[0].select(sel.map(|s| row_of[s]));
     f.render_stateful_widget(List::new(rows), inner, &mut app.views[0]);
+    if focused && let Some(s) = sel {
+        app.rects.row = row_rect(inner, row_of[s], app.views[0].offset());
+    }
 }
 
-/// Selection as a row background (not a List highlight) so badge colours survive.
-fn row_style(selected: bool, focused: bool) -> Style {
-    if selected && focused { Style::new().bg(SEL) } else { Style::new() }
+/// Selection as a row background (not a List highlight) so badge colours survive,
+/// with any glow on the item mixed in.
+fn row_style(app: &App, item: &Item, selected: bool, focused: bool) -> Style {
+    let base = if selected && focused { SEL } else { BG };
+    match app.glows.get(&item.key()) {
+        Some(g) => Style::new().bg(g.over(base)),
+        None if selected && focused => Style::new().bg(SEL),
+        None => Style::new(),
+    }
 }
 
 fn news_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -306,11 +363,14 @@ fn news_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw("  "),
                 Span::styled(fit(&i.title, w.saturating_sub(6 + 2 + org_w + 2)), FG),
             ]))
-            .style(row_style(sel == Some(n), focused))
+            .style(row_style(app, i, sel == Some(n), focused))
         })
         .collect();
     app.views[1].select(sel);
     f.render_stateful_widget(List::new(rows), inner, &mut app.views[1]);
+    if focused && let Some(s) = sel {
+        app.rects.row = row_rect(inner, s, app.views[1].offset());
+    }
 }
 
 /// Q&A threads under one header per module (items arrive grouped, see `Data::load`).
@@ -356,10 +416,13 @@ fn forum_panel(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(format!("  {:>note_w$}", i.note), note_color),
             Span::styled(format!("  {}", local(i.when.unwrap_or(0), "%d %b").to_lowercase()), DIM),
         ]))
-        .style(row_style(sel == Some(n), focused)));
+        .style(row_style(app, i, sel == Some(n), focused)));
     }
     app.views[2].select(sel.map(|s| row_of[s]));
     f.render_stateful_widget(List::new(rows), inner, &mut app.views[2]);
+    if focused && let Some(s) = sel {
+        app.rects.row = row_rect(inner, row_of[s], app.views[2].offset());
+    }
 }
 
 fn host(url: &str) -> &str {
@@ -427,6 +490,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
     header(f, app, top, sub);
     footer(f, bottom);
+    app.rects = fx::Rects::default();
 
     let wide = body.width >= WIDE;
     let details_h = if body.height >= if wide { 20 } else { 32 } { 5 } else { 0 };
@@ -439,6 +503,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let [left, right] = Layout::horizontal([Constraint::Percentage(55), Constraint::Fill(1)]).spacing(1).areas(main);
         let news_h = (app.data.sections[1].len() as u16 + 2).clamp(3, right.height / 2);
         let [news, forum] = Layout::vertical([Constraint::Length(news_h), Constraint::Fill(1)]).areas(right);
+        app.rects.panels = [left, news, forum];
         due_panel(f, app, left, false);
         news_panel(f, app, news);
         forum_panel(f, app, forum);
@@ -450,8 +515,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let news_h = (app.data.sections[1].len() as u16 + 2).clamp(3, 6);
         let due_h = due_need.min(main.height.saturating_sub(news_h + 4));
         let [d, n, fo] = Layout::vertical([Constraint::Length(due_h), Constraint::Length(news_h), Constraint::Fill(1)]).areas(main);
+        app.rects.panels = [d, n, fo];
         due_panel(f, app, d, true);
         news_panel(f, app, n);
         forum_panel(f, app, fo);
     }
+    fx::apply(f, app);
 }

@@ -1,4 +1,5 @@
 mod app;
+mod fx;
 mod login;
 mod model;
 mod sync;

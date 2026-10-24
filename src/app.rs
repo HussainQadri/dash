@@ -1,11 +1,14 @@
+use crate::fx::{self, Cue, DISMISS_MS, Glow, Rects};
 use crate::model::*;
 use crate::{sync, ui};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::widgets::ListState;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, SystemTime};
+use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime};
 use std::{env, fs, io, thread};
+use tachyonfx::EffectManager;
 
 const STALE_SECS: i64 = 3600;
 
@@ -14,7 +17,17 @@ pub struct App {
     pub focus: usize,
     pub tables: [ListState; 3],
     pub views: [ListState; 3],
-    pub tick: usize,
+    pub fx: EffectManager<&'static str>,
+    pub rects: Rects,
+    pub cues: Vec<Cue>,
+    pub last_frame: Instant,
+    started: Instant,
+    last_check: Instant,
+    /// Item being dismissed: it dissolves first, then gets marked done.
+    leaving: Option<(String, Instant)>,
+    pub glows: HashMap<String, Glow>,
+    /// Due items' urgency (0 fine, 1 under 24h, 2 overdue), to catch them crossing over.
+    levels: HashMap<String, u8>,
     state: State,
     undo: Vec<String>,
     child: Option<Child>,
@@ -38,7 +51,15 @@ impl App {
             focus: 0,
             tables: Default::default(),
             views: Default::default(),
-            tick: 0,
+            fx: EffectManager::default(),
+            rects: Rects::default(),
+            cues: Vec::new(),
+            last_frame: Instant::now(),
+            started: Instant::now(),
+            last_check: Instant::now(),
+            leaving: None,
+            glows: HashMap::new(),
+            levels: HashMap::new(),
             state,
             undo: Vec::new(),
             child: None,
@@ -47,7 +68,56 @@ impl App {
             quit: false,
         };
         app.clamp();
+        app.mark_new();
+        app.check_deadlines();
         app
+    }
+
+    /// Spinner frame, by time rather than loop count (frames run faster while animating).
+    pub fn tick(&self) -> usize {
+        (self.started.elapsed().as_millis() / 80) as usize
+    }
+
+    /// Effects and glows run at ~60fps; the rest (breathing border, pulses) is slow.
+    fn animating(&self) -> bool {
+        self.fx.is_running()
+            || self.leaving.is_some()
+            || !self.cues.is_empty()
+            || !self.glows.is_empty()
+    }
+
+    /// Light up items dash hasn't shown before (not on the very first run).
+    fn mark_new(&mut self) {
+        let first = self.state.seen.is_empty();
+        let mut changed = false;
+        for key in &self.data.keys {
+            if self.state.seen.insert(key.clone()) {
+                changed = true;
+                if !first {
+                    self.glows.insert(key.clone(), Glow::new(fx::NEW, 4000, 1));
+                }
+            }
+        }
+        if changed {
+            let _ = fs::create_dir_all(data_dir());
+            let _ = write_json(&state_file(), &self.state);
+        }
+    }
+
+    /// Pulse a row red when it drops under 24h or goes overdue while dash is open.
+    fn check_deadlines(&mut self) {
+        let now = now();
+        for i in self.data.sections[0].iter().filter(|i| i.pending) {
+            let Some(d) = i.due else { continue };
+            let level = match d - now {
+                s if s < 0 => 2,
+                s if s <= 86400 => 1,
+                _ => 0,
+            };
+            if self.levels.insert(i.key(), level).is_some_and(|p| level > p) {
+                self.glows.insert(i.key(), Glow::new(fx::ALARM, 2400, 3));
+            }
+        }
     }
 
     pub fn syncing(&self) -> bool {
@@ -58,6 +128,7 @@ impl App {
         self.data = Data::load(&self.state.done);
         self.mtimes = mtimes();
         self.clamp();
+        self.mark_new();
     }
 
     fn clamp(&mut self) {
@@ -125,25 +196,37 @@ impl App {
             return;
         }
         let t = &mut self.tables[self.focus];
+        let before = t.selected();
         let i = t.selected().unwrap_or(0) as isize + delta;
         t.select(Some(i.clamp(0, n as isize - 1) as usize));
+        if t.selected() != before {
+            self.cues.push(Cue::Select);
+        }
+    }
+
+    fn focus_by(&mut self, step: usize) {
+        self.focus = (self.focus + step) % 3;
+        self.cues.extend([Cue::Focus, Cue::Select]);
     }
 
     fn key(&mut self, k: KeyEvent) {
+        if self.leaving.is_some() && !matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
+            return;
+        }
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Char('j') | KeyCode::Down => self.move_by(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_by(-1),
             KeyCode::Char('g') | KeyCode::Home => self.move_by(-9999),
             KeyCode::Char('G') | KeyCode::End => self.move_by(9999),
-            KeyCode::Tab => self.focus = (self.focus + 1) % 3,
-            KeyCode::BackTab => self.focus = (self.focus + 2) % 3,
+            KeyCode::Tab => self.focus_by(1),
+            KeyCode::BackTab => self.focus_by(2),
             KeyCode::Enter | KeyCode::Char('o') => self.open(),
             KeyCode::Char('r') => self.start_sync(),
             KeyCode::Char('d') => {
                 if let Some(key) = self.selected().map(Item::key) {
-                    self.undo.push(key.clone());
-                    self.set_done(key, true);
+                    self.leaving = Some((key, Instant::now()));
+                    self.cues.push(Cue::Dismiss);
                 }
             }
             KeyCode::Char('u') => {
@@ -156,18 +239,28 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        self.tick = self.tick.wrapping_add(1);
+        if let Some((_, at)) = &self.leaving
+            && at.elapsed() >= Duration::from_millis(DISMISS_MS as u64)
+        {
+            let (key, _) = self.leaving.take().unwrap();
+            self.undo.push(key.clone());
+            self.set_done(key, true);
+            self.cues.push(Cue::Select);
+        }
         if let Some(c) = &mut self.child
             && !matches!(c.try_wait(), Ok(None))
         {
             self.child = None;
         }
-        if self.tick.is_multiple_of(4) {
+        if self.last_check.elapsed() >= Duration::from_secs(1) {
+            self.last_check = Instant::now();
             self.external_sync = self.child.is_none() && sync::lock_held();
             if mtimes() != self.mtimes {
                 self.reload();
             }
+            self.check_deadlines();
         }
+        self.glows.retain(|_, g| g.live());
     }
 }
 
@@ -180,7 +273,8 @@ pub fn run() -> io::Result<()> {
     let result = (|| {
         while !app.quit {
             terminal.draw(|f| ui::draw(f, &mut app))?;
-            if event::poll(Duration::from_millis(250))?
+            let wait = if app.animating() { 16 } else { 50 };
+            if event::poll(Duration::from_millis(wait))?
                 && let Event::Key(k) = event::read()?
                 && k.kind == KeyEventKind::Press
             {
