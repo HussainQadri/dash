@@ -11,7 +11,7 @@ Keys: `↵` open link · `d` mark done · `u` undo · `r` refresh · `tab` switc
 
 ## Sources
 
-- **KEATS** runs `~/keats/keats.py` (kept outside this repo), which reads the Moodle web service API and writes `~/keats/out/items.json` and `assessments.json`.
+- **KEATS** runs `~/keats/keats.py` (copy in `keats/keats.py`), which reads the Moodle web service API and writes `~/keats/out/items.json` and `assessments.json`.
 - **Coursework deadlines** aren't Moodle events: modules state them as free text in their assessment tables, each in its own format. `dash sync` has Claude read that text (`prompts/coursework.md`) and caches the result until the text changes.
 - **Gmail** goes through headless `claude -p` with the claude.ai Gmail connector (`prompts/gmail.md`), so it uses a Claude subscription rather than an API key.
 
