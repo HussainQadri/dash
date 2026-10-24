@@ -262,7 +262,7 @@ fn feed_panel(f: &mut Frame, app: &mut App, idx: usize, area: Rect, two_line: bo
     let inner = block.inner(area);
     f.render_widget(block, area);
     if items.is_empty() {
-        let text = if warn.is_some() { "refresh ~/.config/keats/session" } else { "quiet for now" };
+        let text = if warn.is_some() { "run dash login" } else { "quiet for now" };
         return empty(f, inner, if warn.is_some() { icon::ALERT } else { icon::OK }, text, FAINT);
     }
 

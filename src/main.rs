@@ -1,4 +1,5 @@
 mod app;
+mod login;
 mod model;
 mod sync;
 mod theme;
@@ -18,8 +19,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("login") => {
+            if let Err(e) = login::run(std::env::args().nth(2).as_deref()) {
+                eprintln!("dash: {e}");
+                std::process::exit(1);
+            }
+        }
         Some(_) => {
-            eprintln!("usage: dash [sync]");
+            eprintln!("usage: dash [sync|login]");
             std::process::exit(2);
         }
     }

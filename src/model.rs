@@ -11,15 +11,22 @@ fn home() -> PathBuf {
     PathBuf::from(env::var_os("HOME").unwrap_or_default())
 }
 
-pub fn data_dir() -> PathBuf {
+pub fn data_home() -> PathBuf {
     env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".local/share"))
-        .join("dash")
+}
+
+pub fn data_dir() -> PathBuf {
+    data_home().join("dash")
 }
 
 pub fn keats_script() -> PathBuf {
     home().join("keats/keats.py")
+}
+
+pub fn keats_token() -> PathBuf {
+    home().join(".config/keats/token")
 }
 
 pub fn keats_items() -> PathBuf {

@@ -5,6 +5,7 @@ A terminal dashboard (Rust + [ratatui](https://ratatui.rs)) for what needs doing
 ```
 dash         open the dashboard
 dash sync    refresh all sources headlessly (e.g. once after login)
+dash login   sign in to KEATS (saves the token; the forum session then renews itself)
 ```
 
 Keys: `↵` open link · `d` mark done · `u` undo · `r` refresh · `tab` switch panel · `j`/`k` move · `q` quit
@@ -17,7 +18,7 @@ Keys: `↵` open link · `d` mark done · `u` undo · `r` refresh · `tab` switc
 
 ## Requirements
 
-- `python3` and a KEATS token in `~/.config/keats/token` (see `keats.py`)
+- `python3`, Firefox, and a KEATS token in `~/.config/keats/token` from `dash login`
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in, with the Gmail connector enabled
 - A Nerd Font in the terminal for the icons
 
