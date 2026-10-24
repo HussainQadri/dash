@@ -5,9 +5,10 @@ Token: ~/.config/keats/token (or $KEATS_TOKEN). The file may hold either the raw
 token or the full moodledl://token=... redirect URL from the mobile launch flow.
 
 Moodleoverflow Q&A forums aren't exposed to the web service API, so they're
-scraped with a browser session: put the MoodleSession cookie value in
-~/.config/keats/session. It expires after a few idle hours; when it does the
-forum step is skipped and everything else still runs.
+scraped with a browser session cookie kept in ~/.config/keats/session. When it
+expires a new one is minted through the mobile app autologin, which needs the
+private token that `dash login` saves; without it the forum step is skipped
+and everything else still runs.
 """
 import base64
 import html
@@ -16,6 +17,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -32,15 +34,17 @@ FORUM_RECENT_DAYS = 14
 DOWNLOAD_COURSES = ["5CCS2FC2"]
 
 
-def load_token():
-    raw = os.environ.get("KEATS_TOKEN") or TOKEN_FILE.read_text()
-    raw = raw.strip()
+def token_parts():
+    raw = (os.environ.get("KEATS_TOKEN") or TOKEN_FILE.read_text()).strip()
     m = re.search(r"token=([A-Za-z0-9+/=]+)", raw)
     if not m:
-        return raw
-    decoded = base64.b64decode(m.group(1)).decode()
+        return [None, raw]
     # signature:::token[:::privatetoken]
-    return decoded.split(":::")[1]
+    return base64.b64decode(m.group(1)).decode().split(":::")
+
+
+def load_token():
+    return token_parts()[1]
 
 
 TOKEN = None
@@ -147,6 +151,42 @@ def web_get(path, cookie):
     if final.netloc != urllib.parse.urlparse(SITE).netloc or final.path.startswith("/login/"):
         raise SessionExpired()
     return body
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+def new_session():
+    """Mint a MoodleSession cookie via the mobile app autologin and save it."""
+    parts = token_parts()
+    if len(parts) < 3:
+        raise SessionExpired()
+    data = urllib.parse.urlencode({"wstoken": TOKEN, "wsfunction": "tool_mobile_get_autologin_key",
+                                   "moodlewsrestformat": "json", "privatetoken": parts[2]}).encode()
+    # Moodle only hands autologin keys to its own app.
+    req = urllib.request.Request(f"{SITE}/webservice/rest/server.php", data,
+                                 headers={"User-Agent": "MoodleMobile"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        res = json.load(r)
+    if "exception" in res:
+        print(f"  ! autologin: {res.get('errorcode')} - {res.get('message')}", file=sys.stderr)
+        raise SessionExpired()
+    userid = call("core_webservice_get_site_info")["userid"]
+    url = res["autologinurl"] + "?" + urllib.parse.urlencode(
+        {"userid": userid, "key": res["key"], "urltogo": f"{SITE}/my/"})
+    try:
+        headers = urllib.request.build_opener(NoRedirect).open(url, timeout=30).headers
+    except urllib.error.HTTPError as e:
+        headers = e.headers
+    cookies = [m.group(1) for c in headers.get_all("Set-Cookie") or []
+               if (m := re.match(r"MoodleSession=([^;]+)", c)) and m.group(1) != "deleted"]
+    if not cookies:
+        raise SessionExpired()
+    SESSION_FILE.touch(mode=0o600)
+    SESSION_FILE.write_text(cookies[-1])
+    return cookies[-1]
 
 
 def parse_short_ts(s):
@@ -412,17 +452,19 @@ def main():
             for rel in download_course_files(c, sections):
                 new_files.append((c["fullname"], rel))
 
-    # Moodleoverflow Q&A forums (needs the browser session cookie)
+    # Moodleoverflow Q&A forums (needs a browser session cookie)
     discussions, forum_note = [], None
     cookie = SESSION_FILE.read_text().strip() if SESSION_FILE.exists() else ""
-    if not cookie:
-        forum_note = f"skipped: no session cookie in {SESSION_FILE}"
-    else:
+    try:
         try:
+            if not cookie:
+                raise SessionExpired()
             discussions = crawl_overflow(overflow_forums, cookie)
-            write_forum_files(discussions)
         except SessionExpired:
-            forum_note = "skipped: session cookie expired - refresh ~/.config/keats/session"
+            discussions = crawl_overflow(overflow_forums, new_session())
+        write_forum_files(discussions)
+    except SessionExpired:
+        forum_note = "skipped: session expired - run dash login"
     if forum_note:
         print(f"  ! Q&A forums {forum_note}", file=sys.stderr)
 
