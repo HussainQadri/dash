@@ -3,8 +3,8 @@ use crate::model::{Item, SourceStatus, days_from_today, local, now};
 use crate::theme::*;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
-use ratatui::style::{Style, Stylize};
-use ratatui::text::{Line, Span, Text};
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, Padding, Paragraph, Wrap};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -198,6 +198,34 @@ fn footer(f: &mut Frame, area: Rect) {
     f.render_widget(Line::from(spans), area);
 }
 
+/// "5CCS2PEP" -> "PEP"; names that aren't module codes are left alone.
+fn short_org(org: &str) -> &str {
+    let b = org.as_bytes();
+    let run = |from: usize, f: fn(&u8) -> bool| b[from..].iter().take_while(|c| f(c)).count();
+    let year = run(0, u8::is_ascii_digit);
+    let dept = run(year, u8::is_ascii_uppercase);
+    let level = run(year + dept, u8::is_ascii_digit);
+    let end = year + dept + level;
+    if year == 0 || dept == 0 || level == 0 || end == b.len() { org } else { &org[end..] }
+}
+
+fn width(spans: &[Span]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+/// `  label ───────── right`, spanning the row width `w` (after the marker).
+fn group_header(label: &str, color: Color, right: Vec<Span<'static>>, w: usize) -> ListItem<'static> {
+    let gap = if right.is_empty() { 1 } else { 2 };
+    let rule = w.saturating_sub(label.chars().count() + width(&right) + gap);
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(label.to_string(), Style::new().fg(color).bold()),
+        Span::styled(format!(" {}{}", "─".repeat(rule), if right.is_empty() { "" } else { " " }), FAINT),
+    ];
+    spans.extend(right);
+    ListItem::new(Line::from(spans))
+}
+
 fn due_panel(f: &mut Frame, app: &mut App, area: Rect, compact: bool) {
     let focused = app.focus == 0;
     let items = &app.data.sections[0];
@@ -209,36 +237,38 @@ fn due_panel(f: &mut Frame, app: &mut App, area: Rect, compact: bool) {
     }
 
     let w = inner.width.saturating_sub(2) as usize;
-    let org_w = items.iter().map(|i| i.org.chars().count()).max().unwrap_or(0).min(18);
-    let title_w = w.saturating_sub(6 + 2 + 13 + org_w + 2 + 2);
+    let org_w = items.iter().map(|i| short_org(&i.org).chars().count()).max().unwrap_or(0).min(18);
+    let title_w = w.saturating_sub(6 + 2 + 2 + org_w + 2 + 11);
     let sel = app.tables[0].selected();
-    let (mut rows, mut row_of, mut last) = (Vec::new(), Vec::new(), "");
+    let (mut rows, mut row_of, mut last, mut last_org) = (Vec::new(), Vec::new(), "", "");
     for (n, i) in items.iter().enumerate() {
         let b = bucket(i.due);
         if b != last {
             if !rows.is_empty() && !compact {
                 rows.push(ListItem::new(""));
             }
-            let color = if b == "overdue" { RED } else { DIM };
-            rows.push(ListItem::new(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(b, Style::new().fg(color).bold()),
-                Span::styled(format!(" {}", "─".repeat(w.saturating_sub(b.len() + 1))), FAINT),
-            ])));
-            last = b;
+            rows.push(group_header(b, if b == "overdue" { RED } else { DIM }, vec![], w));
+            (last, last_org) = (b, "");
         }
         row_of.push(rows.len());
         let text = if i.pending { FG } else { DIM };
-        let kind_color = if i.gmail { PINK } else { TEAL };
+        let org = short_org(&i.org);
+        let org_span = if org == last_org {
+            Span::styled(fit("·", org_w), FAINT)
+        } else {
+            Span::styled(fit(org, org_w), Style::new().fg(text).bold())
+        };
+        last_org = org;
+        let date = i.due.map(|d| local(d, "%a %d %b").to_lowercase()).unwrap_or_default();
         rows.push(ListItem::new(Line::from(vec![
             marker(sel == Some(n), focused),
             countdown(i),
             Span::raw("  "),
-            Span::styled(fit(&format!("{} {}", kind_icon(i), i.tag), 13), kind_color),
-            Span::styled(fit(&i.org, org_w), Style::new().fg(text).bold()),
+            Span::styled(format!("{} ", kind_icon(i)), if i.gmail { PINK } else { TEAL }),
+            org_span,
             Span::raw("  "),
             Span::styled(fit(&i.title, title_w), text),
-            Span::styled(format!(" {}", if i.gmail { icon::GMAIL } else { icon::KEATS }), FAINT),
+            Span::styled(format!(" {date:>10}"), DIM),
         ]))
         .style(row_style(sel == Some(n), focused)));
     }
@@ -251,14 +281,44 @@ fn row_style(selected: bool, focused: bool) -> Style {
     if selected && focused { Style::new().bg(SEL) } else { Style::new() }
 }
 
-/// Announcements (idx 1) and forum threads (idx 2): two lines per item when
-/// there's room for it, one line in narrow layouts.
-fn feed_panel(f: &mut Frame, app: &mut App, idx: usize, area: Rect, two_line: bool) {
-    let focused = app.focus == idx;
-    let items = &app.data.sections[idx];
-    let warn = if idx == 2 { app.data.forum_note.as_ref().map(|_| "session expired") } else { None };
-    let (ic, name) = if idx == 1 { (icon::NEWS, "announcements") } else { (icon::FORUM, "q&a forums") };
-    let block = panel(ic, name, items.len(), focused, warn);
+fn news_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == 1;
+    let items = &app.data.sections[1];
+    let block = panel(icon::NEWS, "announcements", items.len(), focused, None);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if items.is_empty() {
+        return empty(f, inner, icon::OK, "quiet for now", FAINT);
+    }
+
+    let w = inner.width.saturating_sub(2) as usize;
+    let org_w = items.iter().map(|i| short_org(&i.org).chars().count()).max().unwrap_or(0).min(14);
+    let sel = app.tables[1].selected();
+    let rows: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(n, i)| {
+            ListItem::new(Line::from(vec![
+                marker(sel == Some(n), focused),
+                Span::styled(local(i.when.unwrap_or(0), "%d %b").to_lowercase(), DIM),
+                Span::raw("  "),
+                Span::styled(fit(short_org(&i.org), org_w), TEAL),
+                Span::raw("  "),
+                Span::styled(fit(&i.title, w.saturating_sub(6 + 2 + org_w + 2)), FG),
+            ]))
+            .style(row_style(sel == Some(n), focused))
+        })
+        .collect();
+    app.views[1].select(sel);
+    f.render_stateful_widget(List::new(rows), inner, &mut app.views[1]);
+}
+
+/// Q&A threads under one header per module (items arrive grouped, see `Data::load`).
+fn forum_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == 2;
+    let items = &app.data.sections[2];
+    let warn = app.data.forum_note.as_ref().map(|_| "session expired");
+    let block = panel(icon::FORUM, "q&a forums", items.len(), focused, warn);
     let inner = block.inner(area);
     f.render_widget(block, area);
     if items.is_empty() {
@@ -267,43 +327,39 @@ fn feed_panel(f: &mut Frame, app: &mut App, idx: usize, area: Rect, two_line: bo
     }
 
     let w = inner.width.saturating_sub(2) as usize;
-    let sel = app.tables[idx].selected();
-    let rows: Vec<ListItem> = items
-        .iter()
-        .enumerate()
-        .map(|(n, i)| {
-            let m = || marker(sel == Some(n), focused);
-            let date = local(i.when.unwrap_or(0), "%d %b");
-            let right = if idx == 1 { date.clone() } else { i.note.clone() };
-            let right_color = if i.note.contains("solved") { GREEN } else { DIM };
-            if two_line {
-                let org_w = w.saturating_sub(right.chars().count() + 1);
-                ListItem::new(Text::from(vec![
-                    Line::from(vec![m(), Span::styled(fit(&i.org, org_w), TEAL), Span::raw(" "), Span::styled(right, right_color)]),
-                    Line::from(vec![m(), Span::styled(fit(&i.title, w), FG)]),
-                ]))
-                .style(row_style(sel == Some(n), focused))
-            } else {
-                let org_w = 14;
-                let note_w = if idx == 2 { 18 } else { 0 };
-                let title_w = w.saturating_sub(6 + 2 + org_w + 2 + note_w);
-                let mut spans = vec![
-                    m(),
-                    Span::styled(fit(&date, 6), DIM),
-                    Span::raw("  "),
-                    Span::styled(fit(&i.org, org_w), TEAL),
-                    Span::raw("  "),
-                    Span::styled(fit(&i.title, title_w), FG),
-                ];
-                if idx == 2 {
-                    spans.push(Span::styled(format!("{:>18}", fit(&i.note, 18).trim_end()), right_color));
-                }
-                ListItem::new(Line::from(spans)).style(row_style(sel == Some(n), focused))
+    let note_w = items.iter().map(|i| i.note.chars().count()).max().unwrap_or(0);
+    let title_w = w.saturating_sub(2 + note_w + 2 + 2 + 6);
+    let unanswered = |i: &Item| i.note.starts_with("0 ");
+    let sel = app.tables[2].selected();
+    let (mut rows, mut row_of) = (Vec::new(), Vec::new());
+    for (n, i) in items.iter().enumerate() {
+        if n == 0 || items[n - 1].org != i.org {
+            let (total, open) = app.data.forum_counts.get(&i.org).copied().unwrap_or_default();
+            let mut right = vec![Span::styled(format!("{total} thread{}", if total == 1 { "" } else { "s" }), FAINT)];
+            if open > 0 {
+                right.extend([Span::styled(" · ", FAINT), Span::styled(format!("{open} unanswered"), YELLOW)]);
             }
-        })
-        .collect();
-    app.views[idx].select(sel);
-    f.render_stateful_widget(List::new(rows), inner, &mut app.views[idx]);
+            rows.push(group_header(short_org(&i.org), TEAL, right, w));
+        }
+        row_of.push(rows.len());
+        let note_color = if i.note.contains("solved") {
+            GREEN
+        } else if unanswered(i) {
+            YELLOW
+        } else {
+            DIM
+        };
+        rows.push(ListItem::new(Line::from(vec![
+            marker(sel == Some(n), focused),
+            Span::raw("  "),
+            Span::styled(fit(&i.title, title_w), FG),
+            Span::styled(format!("  {:>note_w$}", i.note), note_color),
+            Span::styled(format!("  {}", local(i.when.unwrap_or(0), "%d %b").to_lowercase()), DIM),
+        ]))
+        .style(row_style(sel == Some(n), focused)));
+    }
+    app.views[2].select(sel.map(|s| row_of[s]));
+    f.render_stateful_widget(List::new(rows), inner, &mut app.views[2]);
 }
 
 fn host(url: &str) -> &str {
@@ -380,22 +436,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     if wide {
-        let [left, right] = Layout::horizontal([Constraint::Percentage(58), Constraint::Fill(1)]).spacing(1).areas(main);
-        let forum_h = (app.data.sections[2].len() as u16 * 2 + 2).clamp(4, right.height / 2);
-        let [news, forum] = Layout::vertical([Constraint::Fill(1), Constraint::Length(forum_h)]).areas(right);
+        let [left, right] = Layout::horizontal([Constraint::Percentage(55), Constraint::Fill(1)]).spacing(1).areas(main);
+        let news_h = (app.data.sections[1].len() as u16 + 2).clamp(3, right.height / 2);
+        let [news, forum] = Layout::vertical([Constraint::Length(news_h), Constraint::Fill(1)]).areas(right);
         due_panel(f, app, left, false);
-        feed_panel(f, app, 1, news, true);
-        feed_panel(f, app, 2, forum, true);
+        news_panel(f, app, news);
+        forum_panel(f, app, forum);
     } else {
         // Stacked: due gets what it needs (items + group headers), feeds share the rest.
         let due = &app.data.sections[0];
         let groups = due.iter().map(|i| bucket(i.due)).collect::<std::collections::BTreeSet<_>>().len() as u16;
         let due_need = (due.len() as u16 + groups).max(1) + 2;
-        let forum_h = (app.data.sections[2].len() as u16 + 2).clamp(3, 6);
-        let due_h = due_need.min(main.height.saturating_sub(forum_h + 4));
-        let [d, n, fo] = Layout::vertical([Constraint::Length(due_h), Constraint::Fill(1), Constraint::Length(forum_h)]).areas(main);
+        let news_h = (app.data.sections[1].len() as u16 + 2).clamp(3, 6);
+        let due_h = due_need.min(main.height.saturating_sub(news_h + 4));
+        let [d, n, fo] = Layout::vertical([Constraint::Length(due_h), Constraint::Length(news_h), Constraint::Fill(1)]).areas(main);
         due_panel(f, app, d, true);
-        feed_panel(f, app, 1, n, false);
-        feed_panel(f, app, 2, fo, false);
+        news_panel(f, app, n);
+        forum_panel(f, app, fo);
     }
 }

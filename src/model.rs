@@ -1,11 +1,13 @@
 use jiff::{Timestamp, civil, tz::TimeZone};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
 pub const RECENT_DAYS: i64 = 14;
+/// Newest Q&A threads shown per module; the group header still counts them all.
+pub const FORUM_PER_MODULE: usize = 5;
 
 fn home() -> PathBuf {
     PathBuf::from(env::var_os("HOME").unwrap_or_default())
@@ -256,6 +258,8 @@ pub struct State {
 pub struct Data {
     pub sections: [Vec<Item>; 3],
     pub forum_note: Option<String>,
+    /// Per module: (threads, unanswered), before trimming to FORUM_PER_MODULE.
+    pub forum_counts: HashMap<String, (usize, usize)>,
     pub status: Status,
 }
 
@@ -283,11 +287,30 @@ impl Data {
         }
         sections[0].sort_by_key(|i| (i.due.is_none(), i.due, !i.pending, i.title.clone()));
         sections[1].sort_by_key(|i| std::cmp::Reverse(i.when));
-        sections[2].sort_by_key(|i| std::cmp::Reverse(i.when));
+        // Forum threads grouped by module, most recently active module first.
+        let mut latest = HashMap::new();
+        for i in &sections[2] {
+            let t = latest.entry(i.org.clone()).or_insert(0);
+            *t = (*t).max(i.when.unwrap_or(0));
+        }
+        sections[2].sort_by_key(|i| (std::cmp::Reverse(latest[&i.org]), i.org.clone(), std::cmp::Reverse(i.when)));
+        let mut forum_counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for i in &sections[2] {
+            let c = forum_counts.entry(i.org.clone()).or_default();
+            c.0 += 1;
+            c.1 += i.note.starts_with("0 ") as usize;
+        }
+        let mut shown: HashMap<String, usize> = HashMap::new();
+        sections[2].retain(|i| {
+            let n = shown.entry(i.org.clone()).or_default();
+            *n += 1;
+            *n <= FORUM_PER_MODULE
+        });
 
         Data {
             sections,
             forum_note: keats.forum_note,
+            forum_counts,
             status: read_json(&status_file()),
         }
     }
