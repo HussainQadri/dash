@@ -26,6 +26,14 @@ pub fn keats_items() -> PathBuf {
     home().join("keats/out/items.json")
 }
 
+pub fn keats_assessments() -> PathBuf {
+    home().join("keats/out/assessments.json")
+}
+
+pub fn coursework_file() -> PathBuf {
+    data_dir().join("coursework.json")
+}
+
 pub fn gmail_file() -> PathBuf {
     data_dir().join("gmail.json")
 }
@@ -168,6 +176,50 @@ impl GmailItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CourseworkItem {
+    pub module: String,
+    pub title: String,
+    #[serde(default)]
+    pub weight: Option<String>,
+    #[serde(default)]
+    pub due: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub url: String,
+}
+
+impl CourseworkItem {
+    fn to_item(&self) -> Item {
+        let title = match &self.weight {
+            Some(w) => format!("{} ({w})", self.title),
+            None => self.title.clone(),
+        };
+        Item {
+            id: format!("cw:{}:{}", self.module, self.title),
+            section: "due".into(),
+            tag: "coursework".into(),
+            org: self.module.clone(),
+            title,
+            due: self.due.as_deref().and_then(parse_deadline),
+            url: self.url.clone(),
+            note: self.note.clone().unwrap_or_default(),
+            pending: true,
+            ..Default::default()
+        }
+    }
+}
+
+/// Extracted deadlines plus the exact text they came from (to skip re-extraction).
+#[derive(Serialize, Deserialize, Default)]
+pub struct Coursework {
+    #[serde(default)]
+    pub input: String,
+    #[serde(default)]
+    pub items: Vec<CourseworkItem>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SourceStatus {
     #[serde(default)]
     pub state: String,
@@ -205,9 +257,11 @@ impl Data {
         let now = now();
         let keats: KeatsFile = read_json(&keats_items());
         let gmail: Vec<GmailItem> = read_json(&gmail_file());
+        let coursework: Coursework = read_json(&coursework_file());
         let items = keats
             .items
             .into_iter()
+            .chain(coursework.items.iter().map(CourseworkItem::to_item))
             .chain(gmail.iter().filter(|g| g.status == "pending").map(GmailItem::to_item));
 
         let mut sections: [Vec<Item>; 3] = Default::default();

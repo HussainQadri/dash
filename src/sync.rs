@@ -1,5 +1,6 @@
 use crate::model::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -11,6 +12,8 @@ use std::{env, thread};
 
 const GMAIL_PROMPT: &str = include_str!("../prompts/gmail.md");
 const GMAIL_SCHEMA: &str = r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["thread_id","company","kind","title","status"],"properties":{"thread_id":{"type":"string"},"company":{"type":"string"},"kind":{"enum":["OA","assessment","interview"]},"title":{"type":"string"},"deadline":{"type":["string","null"]},"url":{"type":["string","null"]},"status":{"enum":["pending","done","rejected"]}}}}}}"#;
+const COURSEWORK_PROMPT: &str = include_str!("../prompts/coursework.md");
+const COURSEWORK_SCHEMA: &str = r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["module","title"],"properties":{"module":{"type":"string"},"title":{"type":"string"},"weight":{"type":["string","null"]},"due":{"type":["string","null"]},"note":{"type":["string","null"]}}}}}}"#;
 const CLAUDE_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub fn lock_held() -> bool {
@@ -45,7 +48,7 @@ pub fn run() -> Result<(), String> {
     }
 
     thread::scope(|s| {
-        s.spawn(|| finish(&status, |s| &mut s.keats, keats_job()));
+        s.spawn(|| finish(&status, |s| &mut s.keats, keats_job().and_then(|()| coursework_job())));
         s.spawn(|| finish(&status, |s| &mut s.gmail, gmail_job(gmail_since)));
     });
     Ok(())
@@ -111,6 +114,39 @@ fn keats_job() -> Result<(), String> {
     })
 }
 
+/// Coursework deadlines live in free text on each module page, phrased
+/// differently per module, so Claude reads them. Only re-run when the text
+/// keats.py gathered has changed since the last extraction.
+fn coursework_job() -> Result<(), String> {
+    let input = fs::read_to_string(keats_assessments()).map_err(|e| format!("assessments.json: {e}"))?;
+    let mut saved: Coursework = read_json(&coursework_file());
+    if saved.input == input {
+        return Ok(());
+    }
+    let modules: BTreeMap<String, Value> = serde_json::from_str(&input).map_err(|e| e.to_string())?;
+    let text: String = modules
+        .iter()
+        .map(|(code, m)| format!("# {code}\n{}\n", m["text"].as_str().unwrap_or("")))
+        .collect();
+    let now = now();
+    let year: i32 = local(now, "%Y").parse().unwrap_or(2026);
+    let start = if local(now, "%m").parse::<u32>().unwrap_or(9) >= 9 { year } else { year - 1 };
+    let prompt = COURSEWORK_PROMPT
+        .replace("{today}", &local(now, "%Y-%m-%d"))
+        .replace("{y1}", &start.to_string())
+        .replace("{y2}", &(start + 1).to_string())
+        .replace("{text}", &text);
+
+    let reply = claude(&prompt, COURSEWORK_SCHEMA, &[])?;
+    let mut items: Vec<CourseworkItem> = serde_json::from_value(reply["items"].clone())
+        .map_err(|e| format!("deadlines: bad output: {e}"))?;
+    for i in &mut items {
+        i.url = modules.get(&i.module).and_then(|m| m["url"].as_str()).unwrap_or_default().to_string();
+    }
+    saved = Coursework { input, items };
+    write_json(&coursework_file(), &saved).map_err(|e| e.to_string())
+}
+
 fn drain(mut r: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut buf = Vec::new();
@@ -129,12 +165,17 @@ fn claude_bin() -> PathBuf {
 }
 
 /// Runs headless Claude (Sonnet) on `prompt` and returns its schema-checked
-/// `structured_output`.
+/// `structured_output`. `tools` empty means no tools and no MCP servers at all.
 fn claude(prompt: &str, schema: &str, tools: &[&str]) -> Result<Value, String> {
-    let mut child = Command::new(claude_bin())
-        .args(["-p", "--model", "sonnet", "--no-session-persistence"])
-        .args(["--output-format", "json", "--json-schema", schema])
-        .args(["--allowedTools", &tools.join(",")])
+    let mut cmd = Command::new(claude_bin());
+    cmd.args(["-p", "--model", "sonnet", "--no-session-persistence"])
+        .args(["--output-format", "json", "--json-schema", schema]);
+    if tools.is_empty() {
+        cmd.args(["--strict-mcp-config", "--tools", ""]);
+    } else {
+        cmd.args(["--allowedTools", &tools.join(",")]);
+    }
+    let mut child = cmd
         .current_dir(data_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

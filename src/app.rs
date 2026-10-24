@@ -24,7 +24,7 @@ pub struct App {
 }
 
 fn mtimes() -> Vec<Option<SystemTime>> {
-    [keats_items(), gmail_file(), status_file()]
+    [keats_items(), gmail_file(), coursework_file(), status_file()]
         .iter()
         .map(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
         .collect()

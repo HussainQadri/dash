@@ -96,7 +96,7 @@ fn kind_icon(i: &Item) -> &'static str {
         "OA" => icon::CODE,
         "interview" => icon::VOICE,
         "assessment" | "quiz" => icon::CHECK,
-        "assign" => icon::TASK,
+        "assign" | "coursework" => icon::TASK,
         _ => icon::CAL,
     }
 }
