@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::fx::{self, lerp, wave};
+use crate::week;
 use crate::model::{Item, SourceStatus, days_from_today, local, now};
 use crate::theme::*;
 use ratatui::Frame;
@@ -11,7 +12,7 @@ use ratatui::widgets::{Block, BorderType, List, ListItem, Padding, Paragraph, Wr
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const WIDE: u16 = 120;
 
-mod icon {
+pub mod icon {
     pub const DASH: &str = "󰃰";
     pub const DUE: &str = "󰔟";
     pub const NEWS: &str = "󰃦";
@@ -30,7 +31,7 @@ mod icon {
 }
 
 /// Pad or cut to exactly `w` columns (every glyph used here is one cell wide).
-fn fit(s: &str, w: usize) -> String {
+pub fn fit(s: &str, w: usize) -> String {
     match s.chars().count() {
         n if n <= w => format!("{s:<w$}"),
         _ if w == 0 => String::new(),
@@ -47,7 +48,7 @@ fn ago(ts: i64) -> String {
     }
 }
 
-fn span_text(d: i64) -> String {
+pub fn span_text(d: i64) -> String {
     match d.abs() {
         a if a < 3600 => format!("{}m", a / 60),
         a if a < 86400 => format!("{}h", a / 3600),
@@ -97,7 +98,7 @@ fn glitch(id: &str) -> Option<Glitch> {
     (phase < 150).then(|| Glitch { frame: ms / 40, color: if (ms / 50).is_multiple_of(2) { PINK } else { RED } })
 }
 
-fn urgency(due: i64) -> ratatui::style::Color {
+pub fn urgency(due: i64) -> ratatui::style::Color {
     match due - now() {
         d if d <= 3 * 86400 => RED,
         d if d <= 7 * 86400 => YELLOW,
@@ -132,7 +133,7 @@ fn marker(selected: bool, focused: bool) -> Span<'static> {
     if selected && focused { Span::styled("▌ ", TEAL) } else { Span::raw("  ") }
 }
 
-fn panel<'a>(ic: &'a str, name: &'a str, count: usize, focused: bool, warn: Option<&'a str>) -> Block<'a> {
+pub fn panel<'a>(ic: &'a str, name: &'a str, count: usize, focused: bool, warn: Option<&'a str>) -> Block<'a> {
     let mut title = vec![
         Span::styled(format!(" {ic} "), if focused { TEAL } else { DIM }),
         Span::styled(format!("{name} "), if focused { Style::new().fg(FG).bold() } else { Style::new().fg(DIM) }),
@@ -171,6 +172,8 @@ fn header(f: &mut Frame, app: &App, top: Rect, sub: Rect) {
     let mut right = source("keats", &s.keats, app);
     right.push(Span::raw("    "));
     right.extend(source("gmail", &s.gmail, app));
+    right.push(Span::raw("    "));
+    right.extend(source("calendar", &s.calendar, app));
     f.render_widget(Line::from(right).right_aligned(), top);
 
     let due = &app.data.sections[0];
@@ -208,7 +211,11 @@ fn source<'a>(name: &'a str, s: &'a SourceStatus, app: &App) -> Vec<Span<'a>> {
         "ok" => ("●", GREEN, ago(s.at)),
         _ => ("●", FAINT, "never synced".into()),
     };
-    let ic = if name == "gmail" { icon::GMAIL } else { icon::KEATS };
+    let ic = match name {
+        "gmail" => icon::GMAIL,
+        "calendar" => icon::CAL,
+        _ => icon::KEATS,
+    };
     let mut spans = vec![Span::styled(format!("{dot} "), color), Span::styled(format!("{ic} {name} "), DIM)];
     if running {
         spans.extend(shimmer(&text));
@@ -237,8 +244,12 @@ fn row_rect(inner: Rect, row: usize, offset: usize) -> Option<Rect> {
     (y < inner.height as usize).then(|| Rect { y: inner.y + y as u16, height: 1, ..inner })
 }
 
-fn footer(f: &mut Frame, area: Rect) {
-    let keys = [("↵", "open"), ("d", "done"), ("u", "undo"), ("r", "refresh"), ("tab", "panel"), ("j/k", "move"), ("q", "quit")];
+fn footer(f: &mut Frame, area: Rect, calendar: bool) {
+    let keys: &[(&str, &str)] = if calendar {
+        &[("h/l", "week"), ("t", "this week"), ("j/k", "event"), ("c", "back"), ("r", "refresh"), ("q", "quit")]
+    } else {
+        &[("↵", "open"), ("d", "done"), ("u", "undo"), ("c", "calendar"), ("r", "refresh"), ("tab", "panel"), ("j/k", "move"), ("q", "quit")]
+    };
     let spans: Vec<Span> = keys
         .iter()
         .flat_map(|(k, v)| [Span::styled(format!(" {k} "), Style::new().fg(FG).bg(SEL).bold()), Span::styled(format!(" {v}   "), DIM)])
@@ -247,7 +258,7 @@ fn footer(f: &mut Frame, area: Rect) {
 }
 
 /// "5CCS2PEP" -> "PEP"; names that aren't module codes are left alone.
-fn short_org(org: &str) -> &str {
+pub fn short_org(org: &str) -> &str {
     let b = org.as_bytes();
     let run = |from: usize, f: fn(&u8) -> bool| b[from..].iter().take_while(|c| f(c)).count();
     let year = run(0, u8::is_ascii_digit);
@@ -336,6 +347,18 @@ fn row_style(app: &App, item: &Item, selected: bool, focused: bool) -> Style {
         None if selected && focused => Style::new().bg(SEL),
         None => Style::new(),
     }
+}
+
+pub fn day_label(ts: i64) -> String {
+    match days_from_today(ts) {
+        0 => "today".into(),
+        1 => "tomorrow".into(),
+        _ => local(ts, "%a %d %b").to_lowercase(),
+    }
+}
+
+pub fn hm(ts: i64) -> String {
+    local(ts, "%H:%M")
 }
 
 fn news_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -476,10 +499,19 @@ fn details(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
+/// Rows the due list needs: items, a header per bucket, and gaps between buckets.
+fn due_rows(app: &App, compact: bool) -> u16 {
+    let due = &app.data.sections[0];
+    let groups = due.iter().map(|i| bucket(i.due)).collect::<std::collections::BTreeSet<_>>().len() as u16;
+    let gaps = if compact { 0 } else { groups.saturating_sub(1) };
+    (due.len() as u16 + groups + gaps).max(1)
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(Block::new().style(Style::new().bg(BG).fg(FG)), f.area());
     let area = f.area().inner(Margin::new(2, 1));
-    let [top, sub, _, body, _, bottom] = Layout::vertical([
+    let [top, sub, class, _, body, _, bottom] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -489,8 +521,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(area);
     header(f, app, top, sub);
-    footer(f, bottom);
+    if let Some(line) = week::next_line(app) {
+        f.render_widget(line, class);
+    }
+    footer(f, bottom, app.calendar);
     app.rects = fx::Rects::default();
+
+    if app.calendar {
+        let [grid, det] = Layout::vertical([Constraint::Fill(1), Constraint::Length(5)]).areas(body);
+        week::draw(f, app, grid);
+        week::details(f, app, det);
+        return fx::apply(f, app);
+    }
 
     let wide = body.width >= WIDE;
     let details_h = if body.height >= if wide { 20 } else { 32 } { 5 } else { 0 };
@@ -509,11 +551,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         forum_panel(f, app, forum);
     } else {
         // Stacked: due gets what it needs (items + group headers), feeds share the rest.
-        let due = &app.data.sections[0];
-        let groups = due.iter().map(|i| bucket(i.due)).collect::<std::collections::BTreeSet<_>>().len() as u16;
-        let due_need = (due.len() as u16 + groups).max(1) + 2;
         let news_h = (app.data.sections[1].len() as u16 + 2).clamp(3, 6);
-        let due_h = due_need.min(main.height.saturating_sub(news_h + 4));
+        let due_h = (due_rows(app, true) + 2).min(main.height.saturating_sub(news_h + 4));
         let [d, n, fo] = Layout::vertical([Constraint::Length(due_h), Constraint::Length(news_h), Constraint::Fill(1)]).areas(main);
         app.rects.panels = [d, n, fo];
         due_panel(f, app, d, true);

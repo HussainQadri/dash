@@ -1,6 +1,6 @@
 # dash
 
-A terminal dashboard (Rust + [ratatui](https://ratatui.rs)) for what needs doing next: KEATS coursework deadlines, module announcements and Q&A threads, plus online assessments and interviews picked out of Gmail.
+A terminal dashboard (Rust + [ratatui](https://ratatui.rs)) for what needs doing next: KEATS coursework deadlines, module announcements and Q&A threads, online assessments and interviews picked out of Gmail, and a week view of your timetable and calendar.
 
 ```
 dash         open the dashboard
@@ -8,7 +8,9 @@ dash sync    refresh all sources headlessly (e.g. once after login)
 dash login   sign in to KEATS (saves the token; the forum session then renews itself)
 ```
 
-Keys: `↵` open link · `d` mark done · `u` undo · `r` refresh · `tab` switch panel · `j`/`k` move · `q` quit
+Keys: `↵` open link · `d` mark done · `u` undo · `c` calendar · `r` refresh · `tab` switch panel · `j`/`k` move · `q` quit
+
+In the calendar: `h`/`l` previous/next week · `t` this week · `j`/`k` pick an event · `c` or `esc` back
 
 ## Sources
 

@@ -6,6 +6,7 @@ mod model;
 mod sync;
 mod theme;
 mod ui;
+mod week;
 
 fn main() {
     match std::env::args().nth(1).as_deref() {

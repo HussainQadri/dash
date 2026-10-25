@@ -17,6 +17,12 @@ pub struct App {
     pub focus: usize,
     pub tables: [ListState; 3],
     pub views: [ListState; 3],
+    /// The full-screen week view instead of the panels.
+    pub calendar: bool,
+    /// Weeks from this one shown in the calendar.
+    pub week: i64,
+    /// Selected calendar event as "cal:uid:start".
+    pub pick: Option<String>,
     pub fx: EffectManager<&'static str>,
     pub rects: Rects,
     pub cues: Vec<Cue>,
@@ -37,7 +43,7 @@ pub struct App {
 }
 
 fn mtimes() -> Vec<Option<SystemTime>> {
-    [keats_items(), gmail_file(), coursework_file(), status_file()]
+    [keats_items(), gmail_file(), coursework_file(), calendar_file(), status_file()]
         .iter()
         .map(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
         .collect()
@@ -51,6 +57,9 @@ impl App {
             focus: 0,
             tables: Default::default(),
             views: Default::default(),
+            calendar: false,
+            week: 0,
+            pick: None,
             fx: EffectManager::default(),
             rects: Rects::default(),
             cues: Vec::new(),
@@ -89,11 +98,13 @@ impl App {
     /// Light up items dash hasn't shown before (not on the very first run).
     fn mark_new(&mut self) {
         let first = self.state.seen.is_empty();
+        // Calendar events arrived later than the rest; don't light up the whole week the first time.
+        let first_cal = !self.state.seen.iter().any(|k| k.starts_with("cal:"));
         let mut changed = false;
         for key in &self.data.keys {
             if self.state.seen.insert(key.clone()) {
                 changed = true;
-                if !first {
+                if !first && !(first_cal && key.starts_with("cal:")) {
                     self.glows.insert(key.clone(), Glow::new(fx::NEW, 4000, 1));
                 }
             }
@@ -213,7 +224,14 @@ impl App {
         if self.leaving.is_some() && !matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
             return;
         }
+        if self.calendar {
+            return self.calendar_key(k);
+        }
         match k.code {
+            KeyCode::Char('c') => {
+                self.calendar = true;
+                self.go_week(self.current_week());
+            }
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Char('j') | KeyCode::Down => self.move_by(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_by(-1),
@@ -235,6 +253,59 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn calendar_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('c') | KeyCode::Esc => self.calendar = false,
+            KeyCode::Char('h') | KeyCode::Left => self.go_week(self.week - 1),
+            KeyCode::Char('l') | KeyCode::Right => self.go_week(self.week + 1),
+            KeyCode::Char('t') => self.go_week(self.current_week()),
+            KeyCode::Char('j') | KeyCode::Down => self.pick_by(1),
+            KeyCode::Char('k') | KeyCode::Up => self.pick_by(-1),
+            KeyCode::Char('r') => self.start_sync(),
+            _ => {}
+        }
+    }
+
+    /// This week, or next week once this one has nothing left (e.g. at the weekend).
+    fn current_week(&self) -> i64 {
+        let n = now();
+        if self.data.week(0).1.iter().any(|e| e.end > n) { 0 } else { 1 }
+    }
+
+    fn go_week(&mut self, week: i64) {
+        self.week = week;
+        self.pick_default();
+    }
+
+    fn week_keys(&self) -> Vec<String> {
+        self.data.week(self.week).1.iter().map(|e| format!("cal:{}:{}", e.uid, e.start)).collect()
+    }
+
+    /// The class on now or next up this week; otherwise the week's first event.
+    fn pick_default(&mut self) {
+        let (_, events) = self.data.week(self.week);
+        let n = now();
+        self.pick = events
+            .iter()
+            .find(|e| e.end > n)
+            .or(events.first())
+            .map(|e| format!("cal:{}:{}", e.uid, e.start));
+        self.cues.push(Cue::Select);
+    }
+
+    fn pick_by(&mut self, delta: isize) {
+        let keys = self.week_keys();
+        let Some(i) = self.pick.as_ref().and_then(|p| keys.iter().position(|k| k == p)) else {
+            return self.pick_default();
+        };
+        let j = (i as isize + delta).clamp(0, keys.len() as isize - 1) as usize;
+        if j != i {
+            self.pick = Some(keys[j].clone());
+            self.cues.push(Cue::Select);
         }
     }
 

@@ -298,7 +298,9 @@ pub struct State {
 
 #[derive(Default)]
 pub struct Data {
+    /// due, announcements, forums.
     pub sections: [Vec<Item>; 3],
+    pub events: Vec<CalEvent>,
     pub forum_note: Option<String>,
     /// Per module: (threads, unanswered), before trimming to FORUM_PER_MODULE.
     pub forum_counts: HashMap<String, (usize, usize)>,
@@ -308,11 +310,24 @@ pub struct Data {
 }
 
 impl Data {
+    /// Monday 00:00 of the week `offset` weeks from this one, and its events.
+    pub fn week(&self, offset: i64) -> (i64, Vec<&CalEvent>) {
+        let n = now();
+        let weekday = Timestamp::from_second(n)
+            .map(|t| t.to_zoned(TimeZone::system()).weekday().to_monday_zero_offset() as i64)
+            .unwrap_or(0);
+        let start = days_start(n, offset * 7 - weekday);
+        let end = days_start(start, 7);
+        (start, self.events.iter().filter(|e| e.start < end && e.end > start).collect())
+    }
+
     pub fn load(done: &BTreeSet<String>) -> Data {
         let now = now();
         let keats: KeatsFile = read_json(&keats_items());
         let gmail: Vec<GmailItem> = read_json(&gmail_file());
         let coursework: Coursework = read_json(&coursework_file());
+        let mut events: Vec<CalEvent> = read_json(&calendar_file());
+        events.sort_by_key(|e| (e.start, e.end));
         let items = keats
             .items
             .into_iter()
@@ -320,7 +335,7 @@ impl Data {
             .chain(gmail.iter().filter(|g| g.status == "pending").map(GmailItem::to_item));
 
         let mut sections: [Vec<Item>; 3] = Default::default();
-        let mut keys = BTreeSet::new();
+        let mut keys: BTreeSet<String> = events.iter().map(|e| format!("cal:{}:{}", e.uid, e.start)).collect();
         for item in items.filter(|i| !done.contains(&i.key())) {
             keys.insert(item.key());
             let idx = match item.section.as_str() {
@@ -358,6 +373,7 @@ impl Data {
             forum_note: keats.forum_note,
             forum_counts,
             keys,
+            events,
             status: read_json(&status_file()),
         }
     }
