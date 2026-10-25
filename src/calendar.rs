@@ -49,7 +49,7 @@ pub fn job() -> Result<(), String> {
     if errors.is_empty() { Ok(()) } else { Err(errors.join(", ")) }
 }
 
-fn fetch(url: &str) -> Result<String, String> {
+pub fn fetch(url: &str) -> Result<String, String> {
     let out = Command::new("curl")
         .args(["-fsSL", "--max-time", "30", url])
         .output()

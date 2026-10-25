@@ -1,4 +1,4 @@
-use crate::model::{data_home, keats_token, now};
+use crate::model::{calendars_config, data_home, keats_token, now};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use std::fs::{self, OpenOptions};
@@ -6,6 +6,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 use std::{env, thread};
 
@@ -13,9 +14,10 @@ const LAUNCH: &str = "https://keats.kcl.ac.uk/admin/tool/mobile/launch.php?servi
 const SCHEME: &str = "x-scheme-handler/moodledl";
 const DESKTOP: &str = "dash-login.desktop";
 
-/// `dash login` signs in through the mobile app launch flow in a private window
-/// (a fresh login is what makes KEATS include the private token). The
-/// moodledl:// redirect comes back as `dash login <url>` via the scheme handler.
+/// `dash login` asks for calendar links if there are none yet, then signs in to
+/// KEATS through the mobile app launch flow in a private window (a fresh login
+/// is what makes KEATS include the private token). The moodledl:// redirect
+/// comes back as `dash login <url>` via the scheme handler.
 pub fn run(callback: Option<&str>) -> io::Result<()> {
     match callback {
         Some(url) => save(url),
@@ -24,6 +26,7 @@ pub fn run(callback: Option<&str>) -> io::Result<()> {
 }
 
 fn login() -> io::Result<()> {
+    setup_calendars()?;
     install_handler()?;
     let before = modified();
     Command::new("firefox")
@@ -52,7 +55,11 @@ fn save(url: &str) -> io::Result<()> {
     if !url.starts_with("moodledl://token=") {
         return Err(io::Error::other("not a KEATS token link"));
     }
-    let path = keats_token();
+    write_private(&keats_token(), url)
+}
+
+/// Secret links and tokens: readable by the owner only.
+fn write_private(path: &Path, contents: &str) -> io::Result<()> {
     fs::create_dir_all(path.parent().unwrap())?;
     let tmp = path.with_extension("tmp");
     OpenOptions::new()
@@ -61,8 +68,51 @@ fn save(url: &str) -> io::Result<()> {
         .truncate(true)
         .mode(0o600)
         .open(&tmp)?
-        .write_all(url.as_bytes())?;
+        .write_all(contents.as_bytes())?;
     fs::rename(tmp, path)
+}
+
+/// First run only: ask for the two iCal links and check each one loads.
+fn setup_calendars() -> io::Result<()> {
+    let path = calendars_config();
+    if path.exists() {
+        return Ok(());
+    }
+    let feeds = [
+        ("kcl", "KCL timetable: mytimetable.kcl.ac.uk → Subscribe → Manual subscription → Copy"),
+        ("google", "Google Calendar (on a computer): Settings → your calendar → Integrate calendar → Secret address in iCal format"),
+    ];
+    println!("Calendars for the week view (Enter skips one).");
+    let mut lines = vec!["# name url (secret links: keep out of git)".to_string()];
+    for (name, hint) in feeds {
+        println!("\n{hint}");
+        loop {
+            print!("{name} link: ");
+            io::stdout().flush()?;
+            let mut url = String::new();
+            io::stdin().read_line(&mut url)?;
+            let url = url.trim();
+            if url.is_empty() {
+                break;
+            }
+            match crate::calendar::fetch(url) {
+                Ok(text) if text.contains("BEGIN:VCALENDAR") => {
+                    println!("  ok, {} events", text.matches("BEGIN:VEVENT").count());
+                    lines.push(format!("{name} {url}"));
+                    break;
+                }
+                Ok(_) => println!("  that link isn't a calendar feed, try again"),
+                Err(e) => println!("  {e}, try again"),
+            }
+        }
+    }
+    if lines.len() > 1 {
+        write_private(&path, &(lines.join("\n") + "\n"))?;
+        println!("Saved to {}\n", path.display());
+    } else {
+        println!("Skipped; run dash login again to add them.\n");
+    }
+    Ok(())
 }
 
 fn install_handler() -> io::Result<()> {
