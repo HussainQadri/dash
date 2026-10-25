@@ -7,7 +7,7 @@ token or the full moodledl://token=... redirect URL from the mobile launch flow.
 Moodleoverflow Q&A forums aren't exposed to the web service API, so they're
 scraped with a browser session cookie kept in ~/.config/keats/session. When it
 expires a new one is minted through the mobile app autologin, which needs the
-private token that `dash login` saves; without it the forum step is skipped
+private token that `hud login` saves; without it the forum step is skipped
 and everything else still runs.
 """
 import base64
@@ -464,7 +464,7 @@ def main():
             discussions = crawl_overflow(overflow_forums, new_session())
         write_forum_files(discussions)
     except SessionExpired:
-        forum_note = "skipped: session expired - run dash login"
+        forum_note = "skipped: session expired - run hud login"
     if forum_note:
         print(f"  ! Q&A forums {forum_note}", file=sys.stderr)
 

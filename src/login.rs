@@ -14,10 +14,10 @@ const LAUNCH: &str = "https://keats.kcl.ac.uk/admin/tool/mobile/launch.php?servi
 const SCHEME: &str = "x-scheme-handler/moodledl";
 const DESKTOP: &str = "dash-login.desktop";
 
-/// `dash login` asks for calendar links if there are none yet, then signs in to
+/// `hud login` asks for calendar links if there are none yet, then signs in to
 /// KEATS through the mobile app launch flow in a private window (a fresh login
 /// is what makes KEATS include the private token). The moodledl:// redirect
-/// comes back as `dash login <url>` via the scheme handler.
+/// comes back as `hud login <url>` via the scheme handler.
 pub fn run(callback: Option<&str>) -> io::Result<()> {
     match callback {
         Some(url) => save(url),
@@ -35,7 +35,7 @@ fn login() -> io::Result<()> {
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()?;
-    println!("Sign in to KEATS in the private window, and let Firefox open the link with dash login.");
+    println!("Sign in to KEATS in the private window, and let Firefox open the link with hud login.");
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(600) {
@@ -110,7 +110,7 @@ fn setup_calendars() -> io::Result<()> {
         write_private(&path, &(lines.join("\n") + "\n"))?;
         println!("Saved to {}\n", path.display());
     } else {
-        println!("Skipped; run dash login again to add them.\n");
+        println!("Skipped; run hud login again to add them.\n");
     }
     Ok(())
 }
@@ -121,7 +121,7 @@ fn install_handler() -> io::Result<()> {
     fs::write(
         dir.join(DESKTOP),
         format!(
-            "[Desktop Entry]\nType=Application\nName=dash login\nExec={} login %u\nMimeType={SCHEME};\nNoDisplay=true\n",
+            "[Desktop Entry]\nType=Application\nName=hud login\nExec={} login %u\nMimeType={SCHEME};\nNoDisplay=true\n",
             env::current_exe()?.display()
         ),
     )?;

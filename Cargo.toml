@@ -3,6 +3,11 @@ name = "dash"
 version = "0.1.0"
 edition = "2024"
 
+# not `dash`: macOS ships a shell by that name
+[[bin]]
+name = "hud"
+path = "src/main.rs"
+
 [dependencies]
 base64 = "0.23.1"
 chrono = "0.4"

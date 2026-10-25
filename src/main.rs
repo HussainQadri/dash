@@ -29,7 +29,7 @@ fn main() {
             }
         }
         Some(_) => {
-            eprintln!("usage: dash [sync|login]");
+            eprintln!("usage: hud [sync|login]");
             std::process::exit(2);
         }
     }
