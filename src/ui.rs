@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Padding, Paragraph, Wrap};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const WIDE: u16 = 120;
@@ -300,15 +300,18 @@ fn due_panel(f: &mut Frame, app: &mut App, area: Rect, compact: bool) {
     let title_w = w.saturating_sub(6 + 2 + 2 + org_w + 2 + 11);
     let sel = app.tables[0].selected();
     let (mut rows, mut row_of, mut last, mut last_org) = (Vec::new(), Vec::new(), "", "");
+    let (mut header_of, mut header) = (Vec::new(), 0);
     for (n, i) in items.iter().enumerate() {
         let b = bucket(i.due);
         if b != last {
             if !rows.is_empty() && !compact {
                 rows.push(ListItem::new(""));
             }
+            header = rows.len();
             rows.push(group_header(b, if b == "overdue" { RED } else { DIM }, vec![], w));
             (last, last_org) = (b, "");
         }
+        header_of.push(header);
         row_of.push(rows.len());
         let text = if i.pending { FG } else { DIM };
         let org = short_org(&i.org);
@@ -332,9 +335,20 @@ fn due_panel(f: &mut Frame, app: &mut App, area: Rect, compact: bool) {
         .style(row_style(app, i, sel == Some(n), focused)));
     }
     app.views[0].select(sel.map(|s| row_of[s]));
+    keep_header(&mut app.views[0], sel.map(|s| header_of[s]));
     f.render_stateful_widget(List::new(rows), inner, &mut app.views[0]);
     if focused && let Some(s) = sel {
         app.rects.row = row_rect(inner, row_of[s], app.views[0].offset());
+    }
+}
+
+/// Scroll up far enough to show the selected item's group header. The list only
+/// scrolls to the selected row itself, which leaves the header hidden after `gg`;
+/// if the group is too long, rendering scrolls back down to the selection.
+fn keep_header(view: &mut ListState, header: Option<usize>) {
+    if let Some(h) = header {
+        let offset = view.offset_mut();
+        *offset = (*offset).min(h);
     }
 }
 
@@ -415,8 +429,10 @@ fn forum_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let unanswered = |i: &Item| i.note.starts_with("0 ");
     let sel = app.tables[2].selected();
     let (mut rows, mut row_of) = (Vec::new(), Vec::new());
+    let (mut header_of, mut header) = (Vec::new(), 0);
     for (n, i) in items.iter().enumerate() {
         if n == 0 || items[n - 1].org != i.org {
+            header = rows.len();
             let (total, open) = app.data.forum_counts.get(&i.org).copied().unwrap_or_default();
             let mut right = vec![Span::styled(format!("{total} thread{}", if total == 1 { "" } else { "s" }), FAINT)];
             if open > 0 {
@@ -424,6 +440,7 @@ fn forum_panel(f: &mut Frame, app: &mut App, area: Rect) {
             }
             rows.push(group_header(short_org(&i.org), TEAL, right, w));
         }
+        header_of.push(header);
         row_of.push(rows.len());
         let note_color = if i.note.contains("solved") {
             GREEN
@@ -442,6 +459,7 @@ fn forum_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .style(row_style(app, i, sel == Some(n), focused)));
     }
     app.views[2].select(sel.map(|s| row_of[s]));
+    keep_header(&mut app.views[2], sel.map(|s| header_of[s]));
     f.render_stateful_widget(List::new(rows), inner, &mut app.views[2]);
     if focused && let Some(s) = sel {
         app.rects.row = row_rect(inner, row_of[s], app.views[2].offset());
