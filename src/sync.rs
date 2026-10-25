@@ -38,6 +38,7 @@ pub fn run() -> Result<(), String> {
         let mut s = status.lock().unwrap();
         s.keats.state = "running".into();
         s.gmail.state = "running".into();
+        s.calendar.state = "running".into();
         let _ = write_json(&status_file(), &*s);
         s.gmail.last_ok
     };
@@ -45,12 +46,14 @@ pub fn run() -> Result<(), String> {
     if let Err(e) = wait_for_network() {
         finish(&status, |s| &mut s.keats, Err(e.clone()));
         finish(&status, |s| &mut s.gmail, Err(e.clone()));
+        finish(&status, |s| &mut s.calendar, Err(e.clone()));
         return Err(e);
     }
 
     thread::scope(|s| {
         s.spawn(|| finish(&status, |s| &mut s.keats, keats_job().and_then(|()| coursework_job())));
         s.spawn(|| finish(&status, |s| &mut s.gmail, gmail_job(gmail_since)));
+        s.spawn(|| finish(&status, |s| &mut s.calendar, crate::calendar::job()));
     });
     Ok(())
 }

@@ -1,4 +1,5 @@
 mod app;
+mod calendar;
 mod fx;
 mod login;
 mod model;

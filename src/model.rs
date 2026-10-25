@@ -39,6 +39,17 @@ pub fn keats_assessments() -> PathBuf {
     data_dir().join("out/assessments.json")
 }
 
+pub fn calendars_config() -> PathBuf {
+    env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"))
+        .join("dash/calendars")
+}
+
+pub fn calendar_file() -> PathBuf {
+    data_dir().join("calendar.json")
+}
+
 pub fn coursework_file() -> PathBuf {
     data_dir().join("coursework.json")
 }
@@ -77,6 +88,15 @@ pub fn days_from_today(ts: i64) -> i64 {
         .ok()
         .and_then(|t| day(t).since(day(Timestamp::now())).ok())
         .map_or(0, |s| s.get_days() as i64)
+}
+
+/// Local midnight `days` days after the day containing `ts`.
+pub fn days_start(ts: i64, days: i64) -> i64 {
+    Timestamp::from_second(ts)
+        .ok()
+        .and_then(|t| t.to_zoned(TimeZone::system()).date().checked_add(jiff::Span::new().days(days)).ok())
+        .and_then(|d| d.to_zoned(TimeZone::system()).ok())
+        .map_or(ts, |z| z.timestamp().as_second())
 }
 
 /// "2026-10-25", "2026-10-25T14:00" (local) or a full RFC 3339 timestamp.
@@ -219,6 +239,23 @@ impl CourseworkItem {
     }
 }
 
+/// An event from a calendar feed, already expanded if it recurs.
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct CalEvent {
+    /// Feed name from the config ("kcl", "google").
+    pub source: String,
+    pub uid: String,
+    /// Module code for timetable events, otherwise the feed name.
+    pub org: String,
+    pub kind: String,
+    pub title: String,
+    pub location: String,
+    pub note: String,
+    pub start: i64,
+    pub end: i64,
+    pub all_day: bool,
+}
+
 /// Extracted deadlines plus the exact text they came from (to skip re-extraction).
 #[derive(Serialize, Deserialize, Default)]
 pub struct Coursework {
@@ -246,6 +283,8 @@ pub struct Status {
     pub keats: SourceStatus,
     #[serde(default)]
     pub gmail: SourceStatus,
+    #[serde(default)]
+    pub calendar: SourceStatus,
 }
 
 #[derive(Serialize, Deserialize, Default)]
