@@ -183,6 +183,9 @@ pub struct GmailItem {
     pub status: String,
     #[serde(default)]
     pub seen: i64,
+    /// When a sync first found this tracked task done.
+    #[serde(default)]
+    pub closed: i64,
 }
 
 impl GmailItem {

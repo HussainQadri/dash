@@ -234,7 +234,10 @@ fn gmail_job(last_ok: i64) -> Result<(), String> {
 
     for g in found {
         match items.iter_mut().find(|i| i.thread_id == g.thread_id) {
-            Some(i) => *i = GmailItem { seen: i.seen, ..g },
+            Some(i) => {
+                let closed = if i.status == "pending" && g.status == "done" { now } else { i.closed };
+                *i = GmailItem { seen: i.seen, closed, ..g }
+            }
             None => items.push(GmailItem { seen: now, ..g }),
         }
     }
