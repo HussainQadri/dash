@@ -156,6 +156,11 @@ impl Item {
     pub fn key(&self) -> String {
         format!("{}:{}", if self.gmail { "gmail" } else { "keats" }, self.id)
     }
+
+    /// A tracked Gmail task that a sync found done, shown for a day so it doesn't just vanish.
+    pub fn email_done(&self) -> bool {
+        self.gmail && !self.pending
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -200,7 +205,7 @@ impl GmailItem {
             url: self.url.clone().filter(|u| !u.is_empty()).unwrap_or_else(|| {
                 format!("https://mail.google.com/mail/u/0/#all/{}", self.thread_id)
             }),
-            pending: true,
+            pending: self.status == "pending",
             gmail: true,
             ..Default::default()
         }
@@ -335,21 +340,26 @@ impl Data {
             .items
             .into_iter()
             .chain(coursework.items.iter().map(CourseworkItem::to_item))
-            .chain(gmail.iter().filter(|g| g.status == "pending").map(GmailItem::to_item));
+            .chain(
+                gmail
+                    .iter()
+                    .filter(|g| g.status == "pending" || (g.status == "done" && g.closed >= now - 86400))
+                    .map(GmailItem::to_item),
+            );
 
         let mut sections: [Vec<Item>; 3] = Default::default();
         let mut keys: BTreeSet<String> = events.iter().map(|e| format!("cal:{}:{}", e.uid, e.start)).collect();
         for item in items.filter(|i| !done.contains(&i.key())) {
             keys.insert(item.key());
             let idx = match item.section.as_str() {
-                "due" if item.due.is_none_or(|d| d >= now - 86400) => 0,
+                "due" if item.email_done() || item.due.is_none_or(|d| d >= now - 86400) => 0,
                 "news" if item.when.unwrap_or(0) >= now - RECENT_DAYS * 86400 => 1,
                 "forum" if item.when.unwrap_or(0) >= now - RECENT_DAYS * 86400 => 2,
                 _ => continue,
             };
             sections[idx].push(item);
         }
-        sections[0].sort_by_key(|i| (i.due.is_none(), i.due, !i.pending, i.title.clone()));
+        sections[0].sort_by_key(|i| (i.email_done(), i.due.is_none(), i.due, !i.pending, i.title.clone()));
         sections[1].sort_by_key(|i| std::cmp::Reverse(i.when));
         // Forum threads grouped by module, most recently active module first.
         let mut latest = HashMap::new();

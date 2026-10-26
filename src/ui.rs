@@ -58,6 +58,9 @@ pub fn span_text(d: i64) -> String {
 
 /// Countdown badge: under a day is a solid red pill, then red, yellow, grey.
 fn countdown(i: &Item) -> Span<'static> {
+    if i.email_done() {
+        return Span::styled(" done ", Style::new().fg(GREEN).bold());
+    }
     let Some(due) = i.due else { return Span::styled("    — ", FAINT) };
     let d = due - now();
     let text = format!(" {:>4} ", if d < 0 { format!("-{}", span_text(d)) } else { span_text(d) });
@@ -106,8 +109,11 @@ pub fn urgency(due: i64) -> ratatui::style::Color {
     }
 }
 
-fn bucket(due: Option<i64>) -> &'static str {
-    match due {
+fn bucket(i: &Item) -> &'static str {
+    if i.email_done() {
+        return "done from email";
+    }
+    match i.due {
         None => "no date",
         Some(d) if d < now() => "overdue",
         Some(d) => match days_from_today(d) {
@@ -302,13 +308,18 @@ fn due_panel(f: &mut Frame, app: &mut App, area: Rect, compact: bool) {
     let (mut rows, mut row_of, mut last, mut last_org) = (Vec::new(), Vec::new(), "", "");
     let (mut header_of, mut header) = (Vec::new(), 0);
     for (n, i) in items.iter().enumerate() {
-        let b = bucket(i.due);
+        let b = bucket(i);
         if b != last {
             if !rows.is_empty() && !compact {
                 rows.push(ListItem::new(""));
             }
             header = rows.len();
-            rows.push(group_header(b, if b == "overdue" { RED } else { DIM }, vec![], w));
+            let color = match b {
+                "overdue" => RED,
+                "done from email" => GREEN,
+                _ => DIM,
+            };
+            rows.push(group_header(b, color, vec![], w));
             (last, last_org) = (b, "");
         }
         header_of.push(header);
@@ -489,10 +500,12 @@ fn details(f: &mut Frame, app: &App, area: Rect) {
             meta.extend([
                 sep(),
                 Span::styled(format!("due {}  ", local(d, "%a %d %b %H:%M").to_lowercase()), FG),
-                Span::styled(rel, Style::new().fg(urgency(d)).bold()),
+                Span::styled(rel, Style::new().fg(if i.pending { urgency(d) } else { DIM }).bold()),
             ]);
         }
-        if !i.pending {
+        if i.email_done() {
+            meta.extend([sep(), Span::styled("done, found in email", GREEN)]);
+        } else if !i.pending {
             meta.extend([sep(), Span::styled("no action pending on keats", DIM)]);
         }
     } else if let Some(w) = i.when {
@@ -520,7 +533,7 @@ fn details(f: &mut Frame, app: &App, area: Rect) {
 /// Rows the due list needs: items, a header per bucket, and gaps between buckets.
 fn due_rows(app: &App, compact: bool) -> u16 {
     let due = &app.data.sections[0];
-    let groups = due.iter().map(|i| bucket(i.due)).collect::<std::collections::BTreeSet<_>>().len() as u16;
+    let groups = due.iter().map(bucket).collect::<std::collections::BTreeSet<_>>().len() as u16;
     let gaps = if compact { 0 } else { groups.saturating_sub(1) };
     (due.len() as u16 + groups + gaps).max(1)
 }
