@@ -8,16 +8,18 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
-use std::{env, thread};
+use std::{env, process, thread};
 
 const LAUNCH: &str = "https://keats.kcl.ac.uk/admin/tool/mobile/launch.php?service=moodle_mobile_app&urlscheme=moodledl&passport=";
+/// On macOS Firefox isn't on PATH but inside its app bundle.
+const FIREFOX: &[&str] = &["firefox", "/Applications/Firefox.app/Contents/MacOS/firefox"];
 const SCHEME: &str = "x-scheme-handler/moodledl";
 const DESKTOP: &str = "dash-login.desktop";
 
 /// `hud login` asks for calendar links if there are none yet, then signs in to
-/// KEATS through the mobile app launch flow in a private window (a fresh login
-/// is what makes KEATS include the private token). The moodledl:// redirect
-/// comes back as `hud login <url>` via the scheme handler.
+/// KEATS through the mobile app launch flow in a fresh browser session (a fresh
+/// login is what makes KEATS include the private token). The moodledl://
+/// redirect comes back as `hud login <url>` via the scheme handler.
 pub fn run(callback: Option<&str>) -> io::Result<()> {
     match callback {
         Some(url) => save(url),
@@ -29,14 +31,41 @@ fn login() -> io::Result<()> {
     setup_calendars()?;
     install_handler()?;
     let before = modified();
-    Command::new("firefox")
-        .args(["--private-window", &format!("{LAUNCH}{}", now())])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()?;
-    println!("Sign in to KEATS in the private window, and let Firefox open the link with hud login.");
+    let url = format!("{LAUNCH}{}", now());
+    let mut chromium = None;
+    if let Some(ff) = FIREFOX.iter().find_map(|b| crate::timetable::find(b)) {
+        Command::new(ff)
+            .args(["--private-window", &url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()?;
+        println!("Sign in to KEATS in the private window, and let Firefox open the link with hud login.");
+    } else if let Some(browser) = crate::timetable::chromium() {
+        // A throwaway profile is as fresh as a private window.
+        let profile = env::temp_dir().join(format!("hud-keats-{}", process::id()));
+        let _ = fs::remove_dir_all(&profile);
+        let child = Command::new(browser)
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .args(["--no-first-run", "--no-default-browser-check", &url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        chromium = Some((child, profile));
+        println!("Sign in to KEATS in the window that opens, and let it open the link with hud login.");
+    } else {
+        println!("Open this in a private window, sign in to KEATS, and let the browser open the link with hud login:\n\n{url}\n");
+    }
+    let result = wait_for_token(before);
+    if let Some((mut child, profile)) = chromium {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_dir_all(profile);
+    }
+    result
+}
 
+fn wait_for_token(before: Option<SystemTime>) -> io::Result<()> {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(600) {
         thread::sleep(Duration::from_millis(500));

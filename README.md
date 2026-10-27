@@ -26,7 +26,8 @@ In the calendar: `h`/`l` previous/next week · `t` this week · `j`/`k` pick an 
 
 ## Requirements
 
-- `python3`, `curl`, Firefox, and a KEATS token in `~/.config/keats/token` from `hud login`
+- `python3`, `curl`, and a KEATS token in `~/.config/keats/token` from `hud login`
+- Firefox or a Chromium-family browser (Chrome, Chromium, Brave, Edge) for `hud login`, which signs in from a private window or a throwaway profile. With neither, it prints the link to open in any browser's private window. The MyTimetable sign-in needs the Chromium-family one, or the timetable link pasted by hand.
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in, with the Gmail connector enabled
 - A Nerd Font in the terminal for the icons
 

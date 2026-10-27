@@ -45,11 +45,13 @@ pub fn feed_url() -> Result<String, String> {
     }
 }
 
+/// The first Chromium-family browser installed.
+pub fn chromium() -> Option<String> {
+    BROWSERS.iter().find_map(|b| find(b))
+}
+
 fn sign_in(url: &str) -> Result<String, String> {
-    let browser = BROWSERS
-        .iter()
-        .find_map(|b| find(b))
-        .ok_or("needs Chromium, Chrome, Brave or Edge")?;
+    let browser = chromium().ok_or("needs Chromium, Chrome, Brave or Edge")?;
     let profile = env::temp_dir().join(format!("hud-mytimetable-{}", process::id()));
     let _ = fs::remove_dir_all(&profile);
     fs::create_dir_all(profile.join("Default")).map_err(|e| e.to_string())?;
@@ -74,7 +76,7 @@ fn sign_in(url: &str) -> Result<String, String> {
     token
 }
 
-fn find(name: &str) -> Option<String> {
+pub fn find(name: &str) -> Option<String> {
     if name.starts_with('/') {
         return Path::new(name).exists().then(|| name.to_string());
     }
