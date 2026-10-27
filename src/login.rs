@@ -1,4 +1,4 @@
-use crate::model::{calendars_config, data_home, keats_token, now};
+use crate::model::{calendars_config, keats_token, now};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use std::fs::{self, OpenOptions};
@@ -13,8 +13,13 @@ use std::{env, process, thread};
 const LAUNCH: &str = "https://keats.kcl.ac.uk/admin/tool/mobile/launch.php?service=moodle_mobile_app&urlscheme=moodledl&passport=";
 /// On macOS Firefox isn't on PATH but inside its app bundle.
 const FIREFOX: &[&str] = &["firefox", "/Applications/Firefox.app/Contents/MacOS/firefox"];
+#[cfg(not(target_os = "macos"))]
 const SCHEME: &str = "x-scheme-handler/moodledl";
+#[cfg(not(target_os = "macos"))]
 const DESKTOP: &str = "dash-login.desktop";
+/// macOS hands URLs to app bundles, so the handler there is an AppleScript applet.
+#[cfg(target_os = "macos")]
+const APPLET: &str = "Applications/hud login.app";
 
 /// `hud login` asks for calendar links if there are none yet, then signs in to
 /// KEATS through the mobile app launch flow in a fresh browser session (a fresh
@@ -166,8 +171,39 @@ fn check(url: &str) -> Result<usize, String> {
     Ok(text.matches("BEGIN:VEVENT").count())
 }
 
+#[cfg(target_os = "macos")]
 fn install_handler() -> io::Result<()> {
-    let dir = data_home().join("applications");
+    let app = std::path::PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(APPLET);
+    let exe = env::current_exe()?.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+    let _ = fs::remove_dir_all(&app);
+    fs::create_dir_all(app.parent().unwrap())?;
+    let plist = app.join("Contents/Info.plist");
+    let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+    let script = format!("on open location u\n\tdo shell script quoted form of \"{exe}\" & \" login \" & quoted form of u\nend open location");
+    succeed(Command::new("osacompile").arg("-o").arg(&app).args(["-e", &script]))?;
+    let types = "<array><dict><key>CFBundleURLName</key><string>KEATS token</string>\
+        <key>CFBundleURLSchemes</key><array><string>moodledl</string></array></dict></array>";
+    succeed(Command::new("plutil").args(["-insert", "CFBundleURLTypes", "-xml", types]).arg(&plist))?;
+    // No Dock icon while it runs.
+    succeed(Command::new("plutil").args(["-insert", "LSUIElement", "-bool", "true"]).arg(&plist))?;
+    // Editing Info.plist breaks the applet's ad-hoc signature, so sign it again.
+    succeed(Command::new("codesign").args(["--force", "--sign", "-"]).arg(&app))?;
+    succeed(Command::new(lsregister).arg("-f").arg(&app))
+}
+
+#[cfg(target_os = "macos")]
+fn succeed(cmd: &mut Command) -> io::Result<()> {
+    let name = cmd.get_program().to_string_lossy().rsplit('/').next().unwrap_or_default().to_string();
+    let out = cmd.stdin(Stdio::null()).output()?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(io::Error::other(format!("{name}: {}", String::from_utf8_lossy(&out.stderr).trim())))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_handler() -> io::Result<()> {
+    let dir = crate::model::data_home().join("applications");
     fs::create_dir_all(&dir)?;
     fs::write(
         dir.join(DESKTOP),
