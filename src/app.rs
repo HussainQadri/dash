@@ -11,6 +11,7 @@ use std::{env, fs, io, thread};
 use tachyonfx::EffectManager;
 
 const STALE_SECS: i64 = 3600;
+const OPENER: &str = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
 
 pub struct App {
     pub data: Data,
@@ -178,7 +179,7 @@ impl App {
 
     fn open(&self) {
         let Some(item) = self.selected().filter(|i| !i.url.is_empty()) else { return };
-        let child = Command::new("xdg-open")
+        let child = Command::new(OPENER)
             .arg(&item.url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
