@@ -5,6 +5,7 @@ mod login;
 mod model;
 mod sync;
 mod theme;
+mod timetable;
 mod ui;
 mod week;
 

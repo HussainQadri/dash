@@ -72,40 +72,31 @@ fn write_private(path: &Path, contents: &str) -> io::Result<()> {
     fs::rename(tmp, path)
 }
 
-/// First run only: ask for the two iCal links and check each one loads.
+/// First run only: fetch the KCL timetable link by signing in to MyTimetable
+/// (falling back to asking for it), ask for the Google one, check both load.
 fn setup_calendars() -> io::Result<()> {
     let path = calendars_config();
     if path.exists() {
         return Ok(());
     }
-    let feeds = [
-        ("kcl", "KCL timetable: mytimetable.kcl.ac.uk → Subscribe → Manual subscription → Copy"),
-        ("google", "Google Calendar (on a computer): Settings → your calendar → Integrate calendar → Secret address in iCal format"),
-    ];
-    println!("Calendars for the week view (Enter skips one).");
     let mut lines = vec!["# name url (secret links: keep out of git)".to_string()];
-    for (name, hint) in feeds {
-        println!("\n{hint}");
-        loop {
-            print!("{name} link: ");
-            io::stdout().flush()?;
-            let mut url = String::new();
-            io::stdin().read_line(&mut url)?;
-            let url = url.trim();
-            if url.is_empty() {
-                break;
-            }
-            match crate::calendar::fetch(url) {
-                Ok(text) if text.contains("BEGIN:VCALENDAR") => {
-                    println!("  ok, {} events", text.matches("BEGIN:VEVENT").count());
-                    lines.push(format!("{name} {url}"));
-                    break;
-                }
-                Ok(_) => println!("  that link isn't a calendar feed, try again"),
-                Err(e) => println!("  {e}, try again"),
-            }
+    println!("KCL timetable: sign in to MyTimetable in the window that opens.");
+    let kcl = match crate::timetable::feed_url().and_then(|url| check(&url).map(|n| (url, n))) {
+        Ok((url, n)) => {
+            println!("  ok, {n} events");
+            Some(url)
         }
-    }
+        Err(e) => {
+            println!("  couldn't get it automatically ({e})");
+            ask("kcl", "mytimetable.kcl.ac.uk → Subscribe → Manual subscription → Copy")?
+        }
+    };
+    let google = ask(
+        "google",
+        "Google Calendar (on a computer): Settings → your calendar → Integrate calendar → Secret address in iCal format",
+    )?;
+    lines.extend(kcl.map(|u| format!("kcl {u}")));
+    lines.extend(google.map(|u| format!("google {u}")));
     if lines.len() > 1 {
         write_private(&path, &(lines.join("\n") + "\n"))?;
         println!("Saved to {}\n", path.display());
@@ -113,6 +104,37 @@ fn setup_calendars() -> io::Result<()> {
         println!("Skipped; run hud login again to add them.\n");
     }
     Ok(())
+}
+
+/// Prompt for a feed link until one loads; Enter skips it.
+fn ask(name: &str, hint: &str) -> io::Result<Option<String>> {
+    println!("\n{hint} (Enter skips)");
+    loop {
+        print!("{name} link: ");
+        io::stdout().flush()?;
+        let mut url = String::new();
+        io::stdin().read_line(&mut url)?;
+        let url = url.trim();
+        if url.is_empty() {
+            return Ok(None);
+        }
+        match check(url) {
+            Ok(n) => {
+                println!("  ok, {n} events");
+                return Ok(Some(url.to_string()));
+            }
+            Err(e) => println!("  {e}, try again"),
+        }
+    }
+}
+
+/// Number of events if `url` serves an iCal feed.
+fn check(url: &str) -> Result<usize, String> {
+    let text = crate::calendar::fetch(url)?;
+    if !text.contains("BEGIN:VCALENDAR") {
+        return Err("that link isn't a calendar feed".into());
+    }
+    Ok(text.matches("BEGIN:VEVENT").count())
 }
 
 fn install_handler() -> io::Result<()> {
