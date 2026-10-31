@@ -294,10 +294,14 @@ def write_forum_files(discussions):
 
 MODULE_CODE = re.compile(r"\d[A-Z]{3,4}\d[A-Z0-9]+")
 ASSESSMENT_WORDS = re.compile(r"deadline|coursework|assessment|deliverable|submi(t|ssion)|\bdue\b", re.I)
+STRUCK = re.compile(r"<(s|del|strike)\b[^>]*>([\s\S]*?)</\1>"
+                    r"|<span[^>]*text-decoration:\s*line-through[^>]*>([\s\S]*?)</span>", re.I)
 
 
 def table_text(s):
-    """HTML -> text with each table row on one line, cells split by " | "."""
+    """HTML -> text with each table row on one line, cells split by " | ".
+    Struck-through text (a superseded deadline) becomes ~~text~~."""
+    s = STRUCK.sub(lambda m: f"~~{strip_html(m.group(2) or m.group(3), 10**6)}~~", s or "")
     def row(m):
         cells = re.findall(r"<t[dh][^>]*>([\s\S]*?)</t[dh]>", m.group(0))
         return " | ".join(strip_html(c, 10**6) for c in cells) + "<br>"

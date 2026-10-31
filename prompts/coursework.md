@@ -8,6 +8,6 @@ Extract every deadline the user must meet for assessed coursework, plus required
 - due: "YYYY-MM-DDTHH:MM" when a time is given, "YYYY-MM-DD" when only a date is, null when it is TBD or not stated. When the year is omitted, Sep–Dec means {y1} and Jan–Aug means {y2}.
 - note: a very short qualifier when useful (e.g. "TBD: last week of teaching or revision week", "via Gradescope"), else null
 
-Do not include exams, feedback or release dates, formative/self-assessment quizzes, or general rules (mitigating circumstances, late penalties). If a module states no deadlines, return nothing for it. Use only what the text says; never guess a date.
+Do not include exams, feedback or release dates, formative/self-assessment quizzes, or general rules (mitigating circumstances, late penalties). If a module states no deadlines, return nothing for it. Use only what the text says; never guess a date. Text in ~~tildes~~ is struck through on the page: it has been superseded, so ignore it and use the date that replaces it.
 
 {text}
