@@ -30,8 +30,11 @@ OUT = Path(__file__).resolve().parent / "out"
 FILES = Path(__file__).resolve().parent / "files"
 DELAY = 0.3  # seconds between API calls
 FORUM_RECENT_DAYS = 14
-# Course shortname prefixes whose files get downloaded into FILES
-DOWNLOAD_COURSES = ["5CCS2FC2"]
+# Every module course's files are mirrored into FILES, except anything bigger
+# than this (lecture recordings); the rest is specs, slides and worksheets.
+MAX_DOWNLOAD = 100 * 1024 * 1024
+# Bump when the cached post format changes, so every thread is refetched once.
+FORUM_CACHE_VERSION = 2
 
 
 def token_parts():
@@ -85,6 +88,22 @@ def strip_html(s, limit=400):
     return s if len(s) <= limit else s[:limit] + "…"
 
 
+def post_text(s):
+    """Post HTML -> plain text, keeping paragraphs, list items and code layout."""
+    s = s or ""
+    s = re.sub(r"<br\s*/?>", "\n", s)
+    s = re.sub(r"</(p|div|li|h\d|pre|tr|blockquote)>", "\n", s)
+    s = re.sub(r"<li[^>]*>", "* ", s)
+    s = re.sub(r'<img[^>]*alt="([^"]+)"[^>]*>', r"[image: \1]", s)
+    s = re.sub(r"<img[^>]*>", "[image]", s)
+    s = re.sub(r'<a [^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>',
+               lambda m: m.group(2) if html.unescape(m.group(1)) in html.unescape(m.group(2))
+               else f"{m.group(2)} <{m.group(1)}>", s)
+    s = html.unescape(re.sub(r"<[^>]+>", "", s)).replace("\xa0", " ")
+    s = "\n".join(l.rstrip() for l in s.split("\n")).strip()
+    return re.sub(r"\n{3,}", "\n\n", s)
+
+
 def slug(s):
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")[:60]
 
@@ -116,6 +135,8 @@ def download_course_files(course, sections):
                 continue
             for f in m.get("contents") or []:
                 if f.get("type") != "file" or not f.get("fileurl"):
+                    continue
+                if (f.get("filesize") or 0) > MAX_DOWNLOAD:
                     continue
                 folder = [safe_name(p) for p in (f.get("filepath") or "/").split("/") if p]
                 rel = Path(sec_dir, safe_name(m["name"]), *folder, safe_name(f["filename"]))
@@ -218,6 +239,8 @@ def parse_overflow_discussion(page):
         cls = cls.group(1).split() if cls else []
         author = re.search(r'aria-label="([^"]*)"', p)
         text = re.search(r'<div class="post-text">([\s\S]*?)</div>\s*<div class="attachments', p)
+        att = re.search(r'<div class="attachments">([\s\S]*?)</div>', p)
+        files = re.findall(r'href="([^"]*pluginfile[^"]*)"', att.group(1)) if att else []
         if "moodleoverflowcomment" in cls:
             # "Questioner - 15/10/26, 00:58", or the name wrapped in a profile link
             when = re.search(r'<span class="text-muted">[\s\S]*? - ([\d/]+, [\d:]+)</span>', p)
@@ -230,7 +253,8 @@ def parse_overflow_discussion(page):
                      "comment" if "moodleoverflowcomment" in cls else "answer"),
             "solution": "markedsolution" in cls,
             "helpful": "markedhelpful" in cls,
-            "text": strip_html(text.group(1) if text else "", 1500),
+            "text": post_text(text.group(1) if text else ""),
+            "files": [html.unescape(f) for f in dict.fromkeys(files)],
         })
     return posts
 
@@ -257,10 +281,10 @@ def crawl_overflow(forums, cookie):
                 break
             for did, subject, nposts in cards:
                 hit = cache.get(str(did))
-                if not hit or hit["nposts"] != nposts:
+                if not hit or hit["nposts"] != nposts or hit.get("v") != FORUM_CACHE_VERSION:
                     posts = parse_overflow_discussion(
                         web_get(f"/mod/moodleoverflow/discussion.php?d={did}", cookie))
-                    hit = {"nposts": nposts, "posts": posts}
+                    hit = {"nposts": nposts, "posts": posts, "v": FORUM_CACHE_VERSION}
                     cache[str(did)] = hit
                 result.append({"id": did, "course": course, "forum": forum,
                                "subject": subject, "posts": hit["posts"],
@@ -281,14 +305,18 @@ def write_forum_files(discussions):
             L += [f"## {forum}", ""]
             for d in sorted((d for d in ds if d["forum"] == forum),
                             key=lambda d: -max((p["time"] for p in d["posts"]), default=0)):
-                L += [f"### {d['subject']}", d["url"], ""]
+                answers = sum(p["kind"] == "answer" for p in d["posts"])
+                state = ("solved" if any(p["solution"] for p in d["posts"]) else
+                         f"{answers} answer{'s' * (answers != 1)}" if answers else "UNANSWERED")
+                L += [f"### {d['subject']}", f"{d['url']} - {state}", ""]
                 for p in d["posts"]:
                     flags = "".join([" [SOLUTION]" if p["solution"] else "",
                                      " [HELPFUL]" if p["helpful"] else ""])
-                    indent = "  " if p["kind"] == "comment" else ""
-                    L.append(f"{indent}- **{p['kind']}** by {p['author']}, "
-                             f"{fmt_ts(p['time'])}{flags}: {p['text']}")
-                L.append("")
+                    indent = "    " if p["kind"] == "comment" else ""
+                    L.append(f"{indent}- **{p['kind']}** by {p['author']}, {fmt_ts(p['time'])}{flags}:")
+                    L += [f"{indent}  {l}".rstrip() for l in (p["text"] or "(no text)").split("\n")]
+                    L += [f"{indent}  [attachment] {f}" for f in p.get("files", [])]
+                    L.append("")
         (OUT / "forums" / f"{slug(course)}.md").write_text("\n".join(L))
 
 
@@ -452,7 +480,7 @@ def main():
             lines.append("")
         (OUT / "courses" / f"{slug(c['shortname'])}.md").write_text("\n".join(lines))
         (OUT / "courses" / f"{slug(c['shortname'])}.json").write_text(json.dumps(sections, indent=1))
-        if any(c["shortname"].startswith(p) for p in DOWNLOAD_COURSES):
+        if MODULE_CODE.fullmatch(course_label(c)):
             for rel in download_course_files(c, sections):
                 new_files.append((c["fullname"], rel))
 
