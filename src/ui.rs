@@ -9,7 +9,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Padding, Paragraph, Wrap};
 
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const WIDE: u16 = 120;
 
 pub mod icon {
@@ -28,6 +28,7 @@ pub mod icon {
     pub const ALERT: &str = "󰀨";
     pub const FIRE: &str = "󰈸";
     pub const LINK: &str = "󰌷";
+    pub const ASK: &str = "󰭹";
 }
 
 /// Pad or cut to exactly `w` columns (every glyph used here is one cell wide).
@@ -250,11 +251,14 @@ fn row_rect(inner: Rect, row: usize, offset: usize) -> Option<Rect> {
     (y < inner.height as usize).then(|| Rect { y: inner.y + y as u16, height: 1, ..inner })
 }
 
-fn footer(f: &mut Frame, area: Rect, calendar: bool) {
-    let keys: &[(&str, &str)] = if calendar {
-        &[("h/l", "week"), ("t", "this week"), ("j/k", "event"), ("c", "back"), ("r", "refresh"), ("q", "quit")]
-    } else {
-        &[("↵", "open"), ("d", "done"), ("u", "undo"), ("c", "calendar"), ("r", "refresh"), ("tab", "panel"), ("j/k", "move"), ("q", "quit")]
+fn footer(f: &mut Frame, area: Rect, app: &App) {
+    let keys: &[(&str, &str)] = match &app.ask {
+        Some(a) if a.editing && a.running() => &[("↵", "send when done"), ("^c", "stop"), ("pgup/pgdn", "scroll"), ("esc", "stop typing")],
+        Some(a) if a.editing => &[("↵", "ask"), ("tab", "model"), ("pgup/pgdn", "scroll"), ("^u", "clear"), ("esc", "stop typing")],
+        Some(a) if a.running() => &[("a", "type"), ("j/k", "scroll"), ("esc", "stop"), ("q", "quit")],
+        Some(_) => &[("a", "follow up"), ("tab", "model"), ("j/k", "scroll"), ("↵", "open link"), ("r", "new chat"), ("esc", "close"), ("q", "quit")],
+        None if app.calendar => &[("h/l", "week"), ("t", "this week"), ("j/k", "event"), ("c", "back"), ("r", "refresh"), ("q", "quit")],
+        None => &[("↵", "open"), ("a", "ask"), ("d", "done"), ("u", "undo"), ("c", "calendar"), ("r", "refresh"), ("tab", "panel"), ("j/k", "move"), ("q", "quit")],
     };
     let spans: Vec<Span> = keys
         .iter()
@@ -555,8 +559,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(line) = week::next_line(app) {
         f.render_widget(line, class);
     }
-    footer(f, bottom, app.calendar);
+    footer(f, bottom, app);
     app.rects = fx::Rects::default();
+
+    let tick = app.tick();
+    if let Some(ask) = &mut app.ask {
+        crate::ask::draw(f, ask, tick, body);
+        return fx::apply(f, app);
+    }
 
     if app.calendar {
         let [grid, det] = Layout::vertical([Constraint::Fill(1), Constraint::Length(5)]).areas(body);

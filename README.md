@@ -6,9 +6,12 @@ A terminal dashboard (Rust + [ratatui](https://ratatui.rs)) for what needs doing
 hud          open the dashboard
 hud sync     refresh all sources headlessly (e.g. once after login)
 hud login    set up calendars (first time) and sign in to KEATS
+hud ask …    ask a question about your modules (no question: interactive Claude Code)
 ```
 
-Keys: `↵` open link · `d` mark done · `u` undo · `c` calendar · `r` refresh · `tab` switch panel · `j`/`k` move · `q` quit
+Keys: `↵` open link · `a` ask · `d` mark done · `u` undo · `c` calendar · `r` refresh · `tab` switch panel · `j`/`k` move · `q` quit
+
+In the ask pane: type and `↵` to ask, `esc` to stop typing (or stop an answer), then `a` follow up · `j`/`k` or the mouse wheel to scroll · `tab` switch model (sonnet/opus, remembered) · `↵` open the last link in the answer · `r` new conversation · `esc` back
 
 In the calendar: `h`/`l` previous/next week · `t` this week · `j`/`k` pick an event · `c` or `esc` back
 
@@ -22,6 +25,8 @@ In the calendar: `h`/`l` previous/next week · `t` this week · `j`/`k` pick an 
   kcl https://scientia-eu-v4-api-d4-02.azurewebsites.net//api/ical/…/timetable.ics
   google https://calendar.google.com/calendar/ical/…/private-…/basic.ics
   ```
+- **Ask** (`a`, or `hud ask`) runs headless `claude` in `~/.local/share/dash` with read-only tools (`--restricted`; Read, Grep, Glob, plus `unzip -l` and `pdftotext`) and `prompts/ask.md`, which describes the synced files. The item selected when you press `a` is passed along, and follow-ups resume the same session. `tab` in the pane switches between Sonnet and Opus and is remembered; `HUD_ASK_MODEL` overrides it.
+- **Module files** from every module course are mirrored into `~/.local/share/dash/files/<module>/` (files over 100 MB skipped), and Q&A threads keep each post's full text, so ask can read specs, templates and staff answers.
 - **Gmail** goes through headless `claude -p` with the claude.ai Gmail connector (`prompts/gmail.md`), so it uses a Claude subscription rather than an API key.
 
 ## Requirements

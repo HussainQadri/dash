@@ -163,7 +163,7 @@ fn drain(mut r: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
     })
 }
 
-fn claude_bin() -> PathBuf {
+pub fn claude_bin() -> PathBuf {
     env::var_os("PATH")
         .into_iter()
         .flat_map(|p| env::split_paths(&p).collect::<Vec<_>>())

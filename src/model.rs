@@ -302,6 +302,9 @@ pub struct State {
     /// Every item key dash has shown, so new ones can be lit up.
     #[serde(default)]
     pub seen: BTreeSet<String>,
+    /// Model the ask pane last used ("sonnet" or "opus").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_model: Option<String>,
 }
 
 #[derive(Default)]

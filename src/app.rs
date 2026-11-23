@@ -1,7 +1,9 @@
+use crate::ask::Ask;
 use crate::fx::{self, Cue, DISMISS_MS, Glow, Rects};
 use crate::model::*;
 use crate::{sync, ui};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::crossterm::execute;
 use ratatui::widgets::ListState;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
@@ -24,6 +26,8 @@ pub struct App {
     pub week: i64,
     /// Selected calendar event as "cal:uid:start".
     pub pick: Option<String>,
+    /// The ask pane, shown instead of the panels while open.
+    pub ask: Option<Ask>,
     pub fx: EffectManager<&'static str>,
     pub rects: Rects,
     pub cues: Vec<Cue>,
@@ -61,6 +65,7 @@ impl App {
             calendar: false,
             week: 0,
             pick: None,
+            ask: None,
             fx: EffectManager::default(),
             rects: Rects::default(),
             cues: Vec::new(),
@@ -178,16 +183,83 @@ impl App {
     }
 
     fn open(&self) {
-        let Some(item) = self.selected().filter(|i| !i.url.is_empty()) else { return };
-        let child = Command::new(OPENER)
-            .arg(&item.url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn();
-        if let Ok(mut c) = child {
-            thread::spawn(move || c.wait());
+        if let Some(item) = self.selected().filter(|i| !i.url.is_empty()) {
+            open_url(&item.url);
+        }
+    }
+
+    fn key(&mut self, k: KeyEvent) {
+        if self.ask.is_some() {
+            return self.ask_key(k);
+        }
+        self.panel_key(k);
+    }
+
+    fn ask_key(&mut self, k: KeyEvent) {
+        let Some(ask) = &mut self.ask else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Char('c') if ctrl => {
+                if ask.running() {
+                    ask.cancel();
+                } else {
+                    self.ask = None;
+                }
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                ask.next_model();
+                self.state.ask_model = Some(ask.model.clone());
+                let _ = write_json(&state_file(), &self.state);
+            }
+            KeyCode::PageUp => ask.scroll_by(-ask.page()),
+            KeyCode::PageDown => ask.scroll_by(ask.page()),
+            KeyCode::Up => ask.scroll_by(-1),
+            KeyCode::Down => ask.scroll_by(1),
+            _ if ask.editing => match k.code {
+                KeyCode::Esc if ask.turns.is_empty() => self.ask = None,
+                KeyCode::Esc => ask.editing = false,
+                KeyCode::Enter => ask.submit(),
+                KeyCode::Backspace => {
+                    ask.input.pop();
+                }
+                KeyCode::Char('u') if ctrl => ask.input.clear(),
+                KeyCode::Char('w') if ctrl => {
+                    let keep = ask.input.trim_end().rfind(' ').map_or(0, |i| i + 1);
+                    ask.input.truncate(keep);
+                }
+                KeyCode::Char(c) if !ctrl => ask.input.push(c),
+                _ => {}
+            },
+            KeyCode::Esc if ask.running() => ask.cancel(),
+            KeyCode::Esc => self.ask = None,
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('a') | KeyCode::Char('i') => ask.editing = true,
+            KeyCode::Char('r') => {
+                let model = ask.model.clone();
+                let about = self.selected().cloned();
+                self.ask = Some(Ask::new(about.as_ref(), model));
+            }
+            KeyCode::Char('j') => ask.scroll_by(1),
+            KeyCode::Char('k') => ask.scroll_by(-1),
+            KeyCode::Char('d') if ctrl => ask.scroll_by(ask.page()),
+            KeyCode::Char('u') if ctrl => ask.scroll_by(-ask.page()),
+            KeyCode::Char('g') | KeyCode::Home => ask.scroll_by(-99999),
+            KeyCode::Char('G') | KeyCode::End => ask.scroll_by(99999),
+            KeyCode::Enter | KeyCode::Char('o') => {
+                if let Some(url) = ask.last_link() {
+                    open_url(&url);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn mouse(&mut self, m: MouseEvent) {
+        let Some(ask) = &mut self.ask else { return };
+        match m.kind {
+            MouseEventKind::ScrollUp => ask.scroll_by(-3),
+            MouseEventKind::ScrollDown => ask.scroll_by(3),
+            _ => {}
         }
     }
 
@@ -221,7 +293,7 @@ impl App {
         self.cues.extend([Cue::Focus, Cue::Select]);
     }
 
-    fn key(&mut self, k: KeyEvent) {
+    fn panel_key(&mut self, k: KeyEvent) {
         if self.leaving.is_some() && !matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
             return;
         }
@@ -229,6 +301,10 @@ impl App {
             return self.calendar_key(k);
         }
         match k.code {
+            KeyCode::Char('a') | KeyCode::Char('/') => {
+                let about = self.selected().cloned();
+                self.ask = Some(Ask::new(about.as_ref(), crate::ask::default_model()));
+            }
             KeyCode::Char('c') => {
                 self.calendar = true;
                 self.go_week(self.current_week());
@@ -319,6 +395,9 @@ impl App {
             self.set_done(key, true);
             self.cues.push(Cue::Select);
         }
+        if let Some(a) = &mut self.ask {
+            a.poll();
+        }
         if let Some(c) = &mut self.child
             && !matches!(c.try_wait(), Ok(None))
         {
@@ -336,26 +415,54 @@ impl App {
     }
 }
 
+fn open_url(url: &str) {
+    let child = Command::new(OPENER)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+    if let Ok(mut c) = child {
+        thread::spawn(move || c.wait());
+    }
+}
+
 pub fn run() -> io::Result<()> {
     let mut app = App::new();
     if app.stale() {
         app.start_sync();
     }
     let mut terminal = ratatui::init();
+    // The mouse is only captured while the ask pane is open (for wheel scrolling),
+    // so text in the dashboard stays selectable.
+    let mut captured = false;
     let result = (|| {
         while !app.quit {
             terminal.draw(|f| ui::draw(f, &mut app))?;
             let wait = if app.animating() { 16 } else { 50 };
-            if event::poll(Duration::from_millis(wait))?
-                && let Event::Key(k) = event::read()?
-                && k.kind == KeyEventKind::Press
-            {
-                app.key(k);
+            if event::poll(Duration::from_millis(wait))? {
+                match event::read()? {
+                    Event::Key(k) if k.kind == KeyEventKind::Press => app.key(k),
+                    Event::Mouse(m) => app.mouse(m),
+                    _ => {}
+                }
             }
             app.on_tick();
+            if app.ask.is_some() != captured {
+                captured = !captured;
+                if captured {
+                    execute!(io::stdout(), EnableMouseCapture)?;
+                } else {
+                    execute!(io::stdout(), DisableMouseCapture)?;
+                }
+            }
         }
         Ok(())
     })();
+    if captured {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }
