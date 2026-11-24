@@ -29,6 +29,7 @@ pub mod icon {
     pub const FIRE: &str = "󰈸";
     pub const LINK: &str = "󰌷";
     pub const ASK: &str = "󰭹";
+    pub const COPY: &str = "󰆏";
 }
 
 /// Pad or cut to exactly `w` columns (every glyph used here is one cell wide).
@@ -254,9 +255,9 @@ fn row_rect(inner: Rect, row: usize, offset: usize) -> Option<Rect> {
 fn footer(f: &mut Frame, area: Rect, app: &App) {
     let keys: &[(&str, &str)] = match &app.ask {
         Some(a) if a.editing && a.running() => &[("↵", "send when done"), ("^c", "stop"), ("pgup/pgdn", "scroll"), ("esc", "stop typing")],
-        Some(a) if a.editing => &[("↵", "ask"), ("tab", "model"), ("pgup/pgdn", "scroll"), ("^u", "clear"), ("esc", "stop typing")],
+        Some(a) if a.editing => &[("↵", "ask"), ("^y", "copy answer"), ("tab", "model"), ("pgup/pgdn", "scroll"), ("^u", "clear"), ("esc", "stop typing")],
         Some(a) if a.running() => &[("a", "type"), ("j/k", "scroll"), ("esc", "stop"), ("q", "quit")],
-        Some(_) => &[("a", "follow up"), ("tab", "model"), ("j/k", "scroll"), ("↵", "open link"), ("r", "new chat"), ("esc", "close"), ("q", "quit")],
+        Some(_) => &[("a", "follow up"), ("y/Y/c", "copy answer/all/code"), ("tab", "model"), ("j/k", "scroll"), ("↵", "open link"), ("r", "new chat"), ("esc", "close")],
         None if app.calendar => &[("h/l", "week"), ("t", "this week"), ("j/k", "event"), ("c", "back"), ("r", "refresh"), ("q", "quit")],
         None => &[("↵", "open"), ("a", "ask"), ("d", "done"), ("u", "undo"), ("c", "calendar"), ("r", "refresh"), ("tab", "panel"), ("j/k", "move"), ("q", "quit")],
     };

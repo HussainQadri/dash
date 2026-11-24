@@ -223,6 +223,7 @@ impl App {
                     ask.input.pop();
                 }
                 KeyCode::Char('u') if ctrl => ask.input.clear(),
+                KeyCode::Char('y') if ctrl => ask.copy(crate::ask::Copy::Answer),
                 KeyCode::Char('w') if ctrl => {
                     let keep = ask.input.trim_end().rfind(' ').map_or(0, |i| i + 1);
                     ask.input.truncate(keep);
@@ -245,6 +246,9 @@ impl App {
             KeyCode::Char('u') if ctrl => ask.scroll_by(-ask.page()),
             KeyCode::Char('g') | KeyCode::Home => ask.scroll_by(-99999),
             KeyCode::Char('G') | KeyCode::End => ask.scroll_by(99999),
+            KeyCode::Char('y') => ask.copy(crate::ask::Copy::Answer),
+            KeyCode::Char('Y') => ask.copy(crate::ask::Copy::All),
+            KeyCode::Char('c') => ask.copy(crate::ask::Copy::Code),
             KeyCode::Enter | KeyCode::Char('o') => {
                 if let Some(url) = ask.last_link() {
                     open_url(&url);

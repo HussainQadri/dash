@@ -11,7 +11,7 @@ hud ask …    ask a question about your modules (no question: interactive Claud
 
 Keys: `↵` open link · `a` ask · `d` mark done · `u` undo · `c` calendar · `r` refresh · `tab` switch panel · `j`/`k` move · `q` quit
 
-In the ask pane: type and `↵` to ask, `esc` to stop typing (or stop an answer), then `a` follow up · `j`/`k` or the mouse wheel to scroll · `tab` switch model (sonnet/opus, remembered) · `↵` open the last link in the answer · `r` new conversation · `esc` back
+In the ask pane: type and `↵` to ask, `esc` to stop typing (or stop an answer), then `a` follow up · `j`/`k` or the mouse wheel to scroll · `tab` switch model (sonnet/opus, remembered) · `y` copy the answer, `Y` the whole conversation, `c` its code blocks (`^y` while typing) · `↵` open the last link in the answer · `r` new conversation · `esc` back
 
 In the calendar: `h`/`l` previous/next week · `t` this week · `j`/`k` pick an event · `c` or `esc` back
 

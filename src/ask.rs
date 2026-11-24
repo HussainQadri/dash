@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 use std::{env, thread};
 
 const PROMPT: &str = include_str!("../prompts/ask.md");
@@ -220,6 +221,59 @@ pub fn cli(question: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub enum Copy {
+    Answer,
+    All,
+    Code,
+}
+
+/// The contents of every ``` block, without the fences.
+fn code_blocks(text: &str) -> String {
+    let (mut out, mut fence) = (Vec::new(), false);
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fence = !fence;
+            if !fence {
+                out.push(String::new());
+            }
+        } else if fence {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n").trim_end().to_string()
+}
+
+/// Puts `text` on the system clipboard with whichever tool the session has,
+/// falling back to OSC 52, which asks the terminal (or tmux) to do it.
+fn clipboard(text: &str) -> Result<(), String> {
+    let tools: &[&[&str]] = if cfg!(target_os = "macos") {
+        &[&["pbcopy"]]
+    } else if env::var_os("WAYLAND_DISPLAY").is_some() {
+        &[&["wl-copy"], &["xclip", "-selection", "clipboard"], &["xsel", "-ib"]]
+    } else {
+        &[&["xclip", "-selection", "clipboard"], &["xsel", "-ib"]]
+    };
+    for tool in tools {
+        let Ok(mut child) = Command::new(tool[0])
+            .args(&tool[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        let wrote = child.stdin.take().map(|mut i| i.write_all(text.as_bytes()));
+        if matches!(wrote, Some(Ok(()))) && child.wait().is_ok_and(|s| s.success()) {
+            return Ok(());
+        }
+    }
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text);
+    let mut out = std::io::stdout();
+    write!(out, "\x1b]52;c;{b64}\x07").and_then(|()| out.flush()).map_err(|e| e.to_string())
+}
+
 pub struct Turn {
     pub question: String,
     pub answer: String,
@@ -243,6 +297,8 @@ pub struct Ask {
     /// Bottom-most scroll position at the last draw, and the pane height.
     max_scroll: u16,
     page: u16,
+    /// Brief confirmation on the pane border, e.g. "copied answer".
+    notice: Option<(String, Instant)>,
 }
 
 impl Ask {
@@ -259,6 +315,7 @@ impl Ask {
             scroll: None,
             max_scroll: 0,
             page: 10,
+            notice: None,
         }
     }
 
@@ -339,6 +396,42 @@ impl Ask {
         (self.page / 2).max(1) as i32
     }
 
+    fn latest(&self) -> Option<&Turn> {
+        self.turns.iter().rev().find(|t| !t.answer.is_empty())
+    }
+
+    /// Copy the latest answer (`Answer`), the whole conversation, or just the
+    /// code blocks in the latest answer, and say so on the border.
+    pub fn copy(&mut self, what: Copy) {
+        let text = match what {
+            Copy::Answer => self.latest().map(|t| t.answer.clone()),
+            Copy::All => Some(
+                self.turns
+                    .iter()
+                    .filter(|t| !t.answer.is_empty())
+                    .map(|t| format!("> {}\n\n{}", t.question, t.answer))
+                    .collect::<Vec<_>>()
+                    .join("\n\n---\n\n"),
+            )
+            .filter(|s| !s.is_empty()),
+            Copy::Code => self.latest().map(|t| code_blocks(&t.answer)).filter(|s| !s.is_empty()),
+        };
+        let what = match what {
+            Copy::Answer => "answer",
+            Copy::All => "conversation",
+            Copy::Code => "code",
+        };
+        let msg = match text {
+            None if what == "code" => "no code in the answer".to_string(),
+            None => "nothing to copy yet".to_string(),
+            Some(t) => match clipboard(&t) {
+                Ok(()) => format!("{} copied {what}", icon::COPY),
+                Err(e) => format!("copy failed: {e}"),
+            },
+        };
+        self.notice = Some((msg, Instant::now()));
+    }
+
     /// The last link in the latest answer, for ↵.
     pub fn last_link(&self) -> Option<String> {
         let t = self.turns.iter().rev().find(|t| !t.answer.is_empty())?;
@@ -417,6 +510,13 @@ pub fn draw(f: &mut Frame, ask: &mut Ask, tick: usize, area: Rect) {
             let more = Line::styled(format!(" ↓ {} more ", ask.max_scroll - top), DIM);
             f.render_widget(more, Rect { y: body.y + body.height - 1, height: 1, x: body.x + 2, width: body.width.saturating_sub(16) });
         }
+    }
+
+    ask.notice = ask.notice.take().filter(|(_, at)| at.elapsed() < Duration::from_millis(2500));
+    if let Some((msg, _)) = &ask.notice {
+        let color = if msg.starts_with(icon::COPY) { GREEN } else { YELLOW };
+        let r = Rect { y: body.y + body.height - 1, height: 1, x: body.x + 2, width: body.width.saturating_sub(16) };
+        f.render_widget(Line::styled(format!(" {msg} "), color), r);
     }
 
     let border = if ask.editing { TEAL } else { FAINT };
